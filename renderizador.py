@@ -1,102 +1,264 @@
 """
-Módulo de renderização para a simulação de malha viária urbana.
+Módulo de renderização aprimorado para a simulação de malha viária urbana.
 """
 import pygame
-from configuracao import CONFIG
+from typing import Dict, List, Tuple
+from configuracao import CONFIG, TipoHeuristica
 from cruzamento import MalhaViaria
 
 
 class Renderizador:
-    """Lida com a renderização da simulação."""
+    """Sistema de renderização com interface aprimorada."""
     
     def __init__(self):
-        """Inicializa o renderizador com uma superfície de exibição."""
+        """Inicializa o renderizador."""
         self.tela = pygame.display.set_mode(
             (CONFIG.LARGURA_TELA, CONFIG.ALTURA_TELA)
         )
-        pygame.display.set_caption("Simulação de Malha Viária Urbana")
+        pygame.display.set_caption("Simulação de Tráfego Urbano - PGC UFABC")
+        pygame.display.set_icon(self._criar_icone())
+        
         self.relogio = pygame.time.Clock()
+        
+        # Fontes
         self.fontes = {
-            'pequena': pygame.font.SysFont('Arial', 12),
-            'media': pygame.font.SysFont('Arial', 16),
-            'grande': pygame.font.SysFont('Arial', 24)
+            'pequena': pygame.font.SysFont('Arial', CONFIG.TAMANHO_FONTE_PEQUENA),
+            'media': pygame.font.SysFont('Arial', CONFIG.TAMANHO_FONTE_MEDIA),
+            'grande': pygame.font.SysFont('Arial', CONFIG.TAMANHO_FONTE_GRANDE),
+            'titulo': pygame.font.SysFont('Arial', 28, bold=True)
         }
+        
+        # Superfícies para otimização
+        self.superficie_fundo = self._criar_fundo()
+        self.painel_info = None
+        self.ultima_atualizacao_painel = 0
     
-    def renderizar(self, malha: MalhaViaria, info_adicional: dict = None) -> None:
+    def _criar_icone(self) -> pygame.Surface:
+        """Cria um ícone para a janela."""
+        icone = pygame.Surface((32, 32))
+        icone.fill(CONFIG.PRETO)
+        
+        # Desenha um semáforo simplificado
+        pygame.draw.rect(icone, CONFIG.CINZA, (12, 4, 8, 24))
+        pygame.draw.circle(icone, CONFIG.VERMELHO, (16, 8), 3)
+        pygame.draw.circle(icone, CONFIG.AMARELO, (16, 16), 3)
+        pygame.draw.circle(icone, CONFIG.VERDE, (16, 24), 3)
+        
+        return icone
+    
+    def _criar_fundo(self) -> pygame.Surface:
+        """Cria uma superfície de fundo com gradiente."""
+        fundo = pygame.Surface((CONFIG.LARGURA_TELA, CONFIG.ALTURA_TELA))
+        
+        # Gradiente vertical
+        for y in range(CONFIG.ALTURA_TELA):
+            intensidade = int(20 + (40 * y / CONFIG.ALTURA_TELA))
+            cor = (intensidade, intensidade, intensidade + 10)
+            pygame.draw.line(fundo, cor, (0, y), (CONFIG.LARGURA_TELA, y))
+        
+        return fundo
+    
+    def renderizar(self, malha: MalhaViaria, info_simulacao: Dict = None) -> None:
         """
-        Renderiza um quadro da simulação.
+        Renderiza um quadro completo da simulação.
         
         Args:
             malha: A malha viária a ser renderizada
-            info_adicional: Informações adicionais para exibir
+            info_simulacao: Informações adicionais da simulação
         """
-        # Preenche a tela com a cor de fundo
-        self.tela.fill(CONFIG.PRETO)
+        # Desenha o fundo
+        self.tela.blit(self.superficie_fundo, (0, 0))
         
         # Desenha a malha viária
         malha.desenhar(self.tela)
         
-        # Desenha a interface do usuário
-        self._desenhar_ui(malha, info_adicional)
+        # Desenha painéis de informação
+        self._desenhar_painel_superior(malha)
+        self._desenhar_painel_lateral(malha, info_simulacao)
+        self._desenhar_controles()
         
-        # Atualiza a exibição
+        # Atualiza a tela
         pygame.display.flip()
-        
-        # Limita a taxa de quadros
         self.relogio.tick(CONFIG.FPS)
     
-    def _desenhar_ui(self, malha: MalhaViaria, info_adicional: dict = None) -> None:
-        """
-        Desenha elementos da interface do usuário.
+    def _desenhar_painel_superior(self, malha: MalhaViaria) -> None:
+        """Desenha o painel superior com título e informações básicas."""
+        # Fundo do painel
+        altura_painel = 60
+        pygame.draw.rect(self.tela, (30, 30, 40), (0, 0, CONFIG.LARGURA_TELA, altura_painel))
+        pygame.draw.line(self.tela, CONFIG.CINZA, (0, altura_painel), (CONFIG.LARGURA_TELA, altura_painel), 2)
         
-        Args:
-            malha: A malha viária sendo renderizada
-            info_adicional: Informações adicionais para exibir
-        """
         # Título
-        superficie_titulo = self.fontes['grande'].render(
-            "Simulação de Malha Viária Urbana", 
-            True, 
-            CONFIG.BRANCO
-        )
-        
-        rect_titulo = superficie_titulo.get_rect(
-            center=(CONFIG.LARGURA_TELA // 2, 20)
-        )
-        
+        titulo = "SIMULAÇÃO DE TRÁFEGO URBANO"
+        superficie_titulo = self.fontes['titulo'].render(titulo, True, CONFIG.BRANCO)
+        rect_titulo = superficie_titulo.get_rect(center=(CONFIG.LARGURA_TELA // 2, 20))
         self.tela.blit(superficie_titulo, rect_titulo)
         
-        # Informações adicionais
-        if info_adicional:
-            self._desenhar_info_adicional(info_adicional)
-        
-        # Desenha informações de controle sempre
-        self._desenhar_controles()
+        # Subtítulo
+        subtitulo = "Projeto de Graduação em Computação - UFABC"
+        superficie_subtitulo = self.fontes['pequena'].render(subtitulo, True, CONFIG.CINZA_CLARO)
+        rect_subtitulo = superficie_subtitulo.get_rect(center=(CONFIG.LARGURA_TELA // 2, 40))
+        self.tela.blit(superficie_subtitulo, rect_subtitulo)
     
-    def _desenhar_info_adicional(self, info: dict) -> None:
-        """
-        Desenha informações adicionais na tela.
+    def _desenhar_painel_lateral(self, malha: MalhaViaria, info_simulacao: Dict) -> None:
+        """Desenha o painel lateral com estatísticas detalhadas."""
+        # Dimensões do painel
+        largura_painel = 300
+        altura_painel = 400
+        x_painel = CONFIG.LARGURA_TELA - largura_painel - 20
+        y_painel = 80
         
-        Args:
-            info: Dicionário com informações adicionais
-        """
-        y_pos = 50
-        for chave, valor in info.items():
-            texto = f"{chave}: {valor}"
-            superficie = self.fontes['media'].render(texto, True, CONFIG.BRANCO)
-            self.tela.blit(superficie, (CONFIG.LARGURA_TELA - 250, y_pos))
-            y_pos += 25
+        # Fundo do painel
+        superficie_painel = pygame.Surface((largura_painel, altura_painel))
+        superficie_painel.set_alpha(220)
+        superficie_painel.fill((40, 40, 50))
+        
+        # Borda
+        pygame.draw.rect(superficie_painel, CONFIG.CINZA, superficie_painel.get_rect(), 2)
+        
+        # Título do painel
+        y_texto = 15
+        titulo = "ESTATÍSTICAS DA SIMULAÇÃO"
+        superficie_titulo = self.fontes['media'].render(titulo, True, CONFIG.BRANCO)
+        rect_titulo = superficie_titulo.get_rect(centerx=largura_painel//2, y=y_texto)
+        superficie_painel.blit(superficie_titulo, rect_titulo)
+        
+        y_texto += 35
+        pygame.draw.line(superficie_painel, CONFIG.CINZA, (10, y_texto), (largura_painel-10, y_texto), 1)
+        y_texto += 15
+        
+        # Estatísticas
+        estatisticas = malha.obter_estatisticas()
+        
+        # Informações de tempo
+        self._desenhar_secao(superficie_painel, "TEMPO", y_texto, [
+            f"Tempo de Simulação: {estatisticas['tempo_simulacao']:.1f}s",
+            f"Velocidade: {info_simulacao.get('velocidade', 1.0)}x"
+        ])
+        y_texto += 70
+        
+        # Informações de veículos
+        self._desenhar_secao(superficie_painel, "VEÍCULOS", y_texto, [
+            f"Ativos: {estatisticas['veiculos_ativos']}",
+            f"Total Gerado: {estatisticas['veiculos_total']}",
+            f"Concluídos: {estatisticas['veiculos_concluidos']}"
+        ])
+        y_texto += 90
+        
+        # Métricas de desempenho
+        self._desenhar_secao(superficie_painel, "DESEMPENHO", y_texto, [
+            f"Tempo Médio de Viagem: {estatisticas['tempo_viagem_medio']:.1f}s",
+            f"Tempo Médio Parado: {estatisticas['tempo_parado_medio']:.1f}s",
+            f"Eficiência: {self._calcular_eficiencia(estatisticas):.1f}%"
+        ])
+        y_texto += 90
+        
+        # Heurística atual
+        self._desenhar_secao(superficie_painel, "CONTROLE", y_texto, [
+            f"Heurística: {estatisticas['heuristica']}",
+            f"Estado: {info_simulacao.get('estado', 'Executando')}"
+        ])
+        
+        # Desenha o painel na tela
+        self.tela.blit(superficie_painel, (x_painel, y_painel))
+    
+    def _desenhar_secao(self, superficie: pygame.Surface, titulo: str, y_inicial: int, 
+                       itens: List[str]) -> None:
+        """Desenha uma seção de informações no painel."""
+        # Título da seção
+        superficie_titulo = self.fontes['media'].render(titulo, True, CONFIG.AMARELO)
+        superficie.blit(superficie_titulo, (20, y_inicial))
+        
+        # Itens
+        y = y_inicial + 25
+        for item in itens:
+            superficie_item = self.fontes['pequena'].render(item, True, CONFIG.BRANCO)
+            superficie.blit(superficie_item, (30, y))
+            y += 20
+    
+    def _calcular_eficiencia(self, estatisticas: Dict) -> float:
+        """Calcula a eficiência do sistema de tráfego."""
+        if estatisticas['tempo_viagem_medio'] == 0:
+            return 0
+        
+        # Eficiência baseada na razão entre tempo em movimento e tempo total
+        tempo_movimento = estatisticas['tempo_viagem_medio'] - estatisticas['tempo_parado_medio']
+        eficiencia = (tempo_movimento / estatisticas['tempo_viagem_medio']) * 100
+        
+        return max(0, min(100, eficiencia))
     
     def _desenhar_controles(self) -> None:
-        """Desenha as instruções de controle na tela."""
+        """Desenha o painel de controles."""
+        # Dimensões do painel
+        largura_painel = 350
+        altura_painel = 150
+        x_painel = 20
+        y_painel = CONFIG.ALTURA_TELA - altura_painel - 20
+        
+        # Fundo do painel
+        superficie_painel = pygame.Surface((largura_painel, altura_painel))
+        superficie_painel.set_alpha(200)
+        superficie_painel.fill((40, 40, 50))
+        pygame.draw.rect(superficie_painel, CONFIG.CINZA, superficie_painel.get_rect(), 2)
+        
+        # Título
+        y_texto = 10
+        titulo = "CONTROLES"
+        superficie_titulo = self.fontes['media'].render(titulo, True, CONFIG.BRANCO)
+        rect_titulo = superficie_titulo.get_rect(centerx=largura_painel//2, y=y_texto)
+        superficie_painel.blit(superficie_titulo, rect_titulo)
+        
+        # Controles
+        y_texto = 35
         controles = [
-            "Controles:",
-            "ESC - Sair",
-            "ESPAÇO - Pausar/Continuar",
-            "R - Reiniciar simulação",
-            "+/- - Alterar velocidade da simulação"
+            ("ESC", "Sair da simulação"),
+            ("ESPAÇO", "Pausar/Continuar"),
+            ("R", "Reiniciar simulação"),
+            ("+/-", "Ajustar velocidade"),
+            ("1-4", "Mudar heurística"),
+            ("TAB", "Alternar estatísticas")
         ]
         
-        for i, texto in enumerate(controles):
-            superficie = self.fontes['pequena'].render(texto, True, CONFIG.BRANCO)
-            self.tela.blit(superficie, (10, CONFIG.ALTURA_TELA - 100 + i * 20))
+        for tecla, descricao in controles:
+            # Tecla
+            superficie_tecla = self.fontes['pequena'].render(tecla, True, CONFIG.AMARELO)
+            superficie_painel.blit(superficie_tecla, (20, y_texto))
+            
+            # Descrição
+            superficie_desc = self.fontes['pequena'].render(descricao, True, CONFIG.BRANCO)
+            superficie_painel.blit(superficie_desc, (80, y_texto))
+            
+            y_texto += 18
+        
+        # Desenha o painel na tela
+        self.tela.blit(superficie_painel, (x_painel, y_painel))
+    
+    def desenhar_mensagem(self, mensagem: str, cor: Tuple[int, int, int] = None) -> None:
+        """
+        Desenha uma mensagem temporária no centro da tela.
+        
+        Args:
+            mensagem: Texto da mensagem
+            cor: Cor da mensagem
+        """
+        if cor is None:
+            cor = CONFIG.BRANCO
+        
+        # Cria superfície para a mensagem
+        superficie_msg = self.fontes['grande'].render(mensagem, True, cor)
+        rect_msg = superficie_msg.get_rect(center=(CONFIG.LARGURA_TELA // 2, CONFIG.ALTURA_TELA // 2))
+        
+        # Fundo semi-transparente
+        superficie_fundo = pygame.Surface((rect_msg.width + 40, rect_msg.height + 20))
+        superficie_fundo.set_alpha(180)
+        superficie_fundo.fill(CONFIG.PRETO)
+        
+        rect_fundo = superficie_fundo.get_rect(center=(CONFIG.LARGURA_TELA // 2, CONFIG.ALTURA_TELA // 2))
+        
+        # Desenha
+        self.tela.blit(superficie_fundo, rect_fundo)
+        self.tela.blit(superficie_msg, rect_msg)
+    
+    def obter_fps(self) -> float:
+        """Retorna o FPS atual."""
+        return self.relogio.get_fps()

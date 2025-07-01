@@ -176,6 +176,7 @@ pyrightconfig.json
 #database
 database.db
 
+GEMINI.md
 
 # End of https://www.toptal.com/developers/gitignore/api/python
 

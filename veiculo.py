@@ -133,50 +133,58 @@ class Veiculo:
             self.posicao[1] < -margem or 
             self.posicao[1] > CONFIG.ALTURA_TELA + margem):
             self.ativo = False
-    
+
     def processar_semaforo(self, semaforo: Semaforo, posicao_parada: Tuple[float, float]) -> None:
         """
         Processa a reação do veículo ao semáforo.
-        
+
         Args:
             semaforo: Semáforo a ser processado
             posicao_parada: Posição onde o veículo deve parar
         """
         if not semaforo or self.passou_semaforo:
+            # Sem semáforo ou já passou, acelera normalmente
             self.aceleracao_atual = CONFIG.ACELERACAO_VEICULO
             return
-        
+
         # Calcula distância até a linha de parada
         self.distancia_semaforo = self._calcular_distancia_ate_ponto(posicao_parada)
-        
+
         # Se já passou da linha de parada, ignora o semáforo
         if self._passou_da_linha(posicao_parada):
             self.passou_semaforo = True
             self.aceleracao_atual = CONFIG.ACELERACAO_VEICULO
             return
-        
+
         # Lógica baseada no estado do semáforo
         if semaforo.estado == EstadoSemaforo.VERDE:
+            # Semáforo verde: acelera normalmente
             self.aguardando_semaforo = False
             self.aceleracao_atual = CONFIG.ACELERACAO_VEICULO
-            
+
         elif semaforo.estado == EstadoSemaforo.AMARELO:
-            # Calcula se pode passar no amarelo com segurança
+            # Semáforo amarelo: decide se passa ou freia de emergência
             tempo_ate_linha = self.distancia_semaforo / max(self.velocidade, 0.1)
             tempo_ate_parar = self.velocidade / CONFIG.DESACELERACAO_EMERGENCIA
-            
             if tempo_ate_linha < 1.0 and self.velocidade > CONFIG.VELOCIDADE_VEICULO * 0.7:
-                # Próximo demais e rápido demais para parar com segurança
+                # Perto demais e rápido demais: mantém velocidade para não parar no meio
                 self.pode_passar_amarelo = True
                 self.aceleracao_atual = 0
             else:
-                # Pode parar com segurança
+                # Freia para parar antes da linha
                 self._aplicar_frenagem_para_parada(self.distancia_semaforo)
-                
+
         elif semaforo.estado == EstadoSemaforo.VERMELHO:
+            # Semáforo vermelho: para completamente ao chegar na linha
             self.aguardando_semaforo = True
-            self._aplicar_frenagem_para_parada(self.distancia_semaforo)
-    
+            # Se estiver dentro da zona de parada, zera velocidade imediatamente
+            if self.distancia_semaforo <= CONFIG.DISTANCIA_PARADA_SEMAFORO:
+                self.velocidade = 0.0
+                self.aceleracao_atual = 0.0
+            else:
+                # Senão, freia suavemente para atingir exatamente 0 na linha
+                self._aplicar_frenagem_para_parada(self.distancia_semaforo)
+
     def processar_veiculo_frente(self, veiculo_frente: 'Veiculo') -> None:
         """
         Processa a reação a um veículo à frente.

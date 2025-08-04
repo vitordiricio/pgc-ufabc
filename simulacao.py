@@ -163,29 +163,35 @@ class Simulacao:
     
     def _processar_tecla(self, evento: pygame.event.Event) -> None:
         """Processa eventos de teclado."""
+        # Sair da simulação
         if evento.key == pygame.K_ESCAPE:
             self._finalizar_simulacao()
-            
+
+        # Pausar / continuar
         elif evento.key == pygame.K_SPACE:
             self.pausado = not self.pausado
             estado = "Pausado" if self.pausado else "Executando"
             self._mostrar_mensagem(f"Simulação {estado}")
-            
+
+        # Reiniciar
         elif evento.key == pygame.K_r:
             self._reiniciar()
-            
+
+        # Alternar exibição de estatísticas
         elif evento.key == pygame.K_TAB:
             self.mostrar_estatisticas = not self.mostrar_estatisticas
-            
+
+        # Aumentar velocidade
         elif evento.key in [pygame.K_PLUS, pygame.K_EQUALS, pygame.K_KP_PLUS]:
             self.multiplicador_velocidade = min(4.0, self.multiplicador_velocidade + 0.5)
             self._mostrar_mensagem(f"Velocidade: {self.multiplicador_velocidade}x")
-            
+
+        # Diminuir velocidade
         elif evento.key in [pygame.K_MINUS, pygame.K_KP_MINUS]:
             self.multiplicador_velocidade = max(0.5, self.multiplicador_velocidade - 0.5)
             self._mostrar_mensagem(f"Velocidade: {self.multiplicador_velocidade}x")
-            
-        # Mudança de heurística
+
+        # Heurísticas automáticas
         elif evento.key == pygame.K_1:
             self._mudar_heuristica(TipoHeuristica.TEMPO_FIXO)
         elif evento.key == pygame.K_2:
@@ -194,9 +200,18 @@ class Simulacao:
             self._mudar_heuristica(TipoHeuristica.ADAPTATIVA_DENSIDADE)
         elif evento.key == pygame.K_4:
             self._mudar_heuristica(TipoHeuristica.WAVE_GREEN)
-        
-        # Salvar relatório
-        elif evento.key == pygame.K_s and evento.mod & pygame.KMOD_CTRL:
+
+        # Ativar Modo Manual
+        elif evento.key == pygame.K_5:
+            self._mudar_heuristica(TipoHeuristica.MANUAL)
+
+        # Avançar fase de semáforos em Modo Manual
+        elif evento.key == pygame.K_n and self.heuristica_atual == TipoHeuristica.MANUAL:
+            self.malha.gerenciador_semaforos.avancar_manual()
+            self._mostrar_mensagem("Manual: semáforos avançados")
+
+        # Salvar relatório (Ctrl+S)
+        elif evento.key == pygame.K_s and (evento.mod & pygame.KMOD_CTRL):
             self._salvar_relatorio()
     
     def _mudar_heuristica(self, nova_heuristica: TipoHeuristica) -> None:
@@ -205,24 +220,28 @@ class Simulacao:
             # Registra tempo da heurística anterior
             tempo_atual = pygame.time.get_ticks()
             tempo_decorrido = (tempo_atual - self.inicio_heuristica) / 1000
-            
+
             if self.heuristica_atual not in self.tempo_por_heuristica:
                 self.tempo_por_heuristica[self.heuristica_atual] = 0
             self.tempo_por_heuristica[self.heuristica_atual] += tempo_decorrido
-            
-            # Muda para nova heurística
+
+            # Muda para nova heurística no modelo
             self.heuristica_atual = nova_heuristica
             self.malha.mudar_heuristica(nova_heuristica)
             self.inicio_heuristica = tempo_atual
-            
-            nome_heuristica = {
+
+            # Mapear nomes (incluindo Manual)
+            nomes = {
                 TipoHeuristica.TEMPO_FIXO: "Tempo Fixo",
                 TipoHeuristica.ADAPTATIVA_SIMPLES: "Adaptativa Simples",
                 TipoHeuristica.ADAPTATIVA_DENSIDADE: "Adaptativa por Densidade",
-                TipoHeuristica.WAVE_GREEN: "Onda Verde"
-            }[nova_heuristica]
-            
+                TipoHeuristica.WAVE_GREEN: "Onda Verde",
+                TipoHeuristica.MANUAL: "Manual"
+            }
+            nome_heuristica = nomes.get(nova_heuristica, "Desconhecida")
+
             self._mostrar_mensagem(f"Heurística: {nome_heuristica}")
+
     
     def _reiniciar(self) -> None:
         """Reinicia a simulação."""

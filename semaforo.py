@@ -213,6 +213,21 @@ class GerenciadorSemaforos:
         if id_cruzamento not in self.semaforos:
             self.semaforos[id_cruzamento] = {}
         self.semaforos[id_cruzamento][semaforo.direcao] = semaforo
+
+    def avancar_manual(self) -> None:
+        """
+        Avança IMEDIATAMENTE o estado de todos os semáforos:
+        Verde → Amarelo → Vermelho → Verde.
+        """
+        for semaforos_cruzamento in self.semaforos.values():
+            for sem in semaforos_cruzamento.values():
+                if sem.estado == EstadoSemaforo.VERDE:
+                    sem._mudar_para_estado(EstadoSemaforo.AMARELO)
+                elif sem.estado == EstadoSemaforo.AMARELO:
+                    sem._mudar_para_estado(EstadoSemaforo.VERMELHO)
+                elif sem.estado == EstadoSemaforo.VERMELHO:
+                    sem._mudar_para_estado(EstadoSemaforo.VERDE)
+
     
     def atualizar(self, densidade_por_cruzamento: Dict[Tuple[int, int], Dict[Direcao, int]]) -> None:
         """

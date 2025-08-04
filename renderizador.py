@@ -107,59 +107,67 @@ class Renderizador:
         altura_painel = 400
         x_painel = CONFIG.LARGURA_TELA - largura_painel - 20
         y_painel = 80
-        
+
         # Fundo do painel
         superficie_painel = pygame.Surface((largura_painel, altura_painel))
         superficie_painel.set_alpha(220)
         superficie_painel.fill((40, 40, 50))
-        
+
         # Borda
         pygame.draw.rect(superficie_painel, CONFIG.CINZA, superficie_painel.get_rect(), 2)
-        
+
         # Título do painel
         y_texto = 15
         titulo = "ESTATÍSTICAS DA SIMULAÇÃO"
         superficie_titulo = self.fontes['media'].render(titulo, True, CONFIG.BRANCO)
         rect_titulo = superficie_titulo.get_rect(centerx=largura_painel//2, y=y_texto)
         superficie_painel.blit(superficie_titulo, rect_titulo)
-        
+
+        # Linha separadora
         y_texto += 35
-        pygame.draw.line(superficie_painel, CONFIG.CINZA, (10, y_texto), (largura_painel-10, y_texto), 1)
+        pygame.draw.line(superficie_painel, CONFIG.CINZA,
+                         (10, y_texto), (largura_painel - 10, y_texto), 1)
         y_texto += 15
-        
-        # Estatísticas
+
         estatisticas = malha.obter_estatisticas()
-        
-        # Informações de tempo
+
+        # Seção TEMPO
         self._desenhar_secao(superficie_painel, "TEMPO", y_texto, [
             f"Tempo de Simulação: {estatisticas['tempo_simulacao']:.1f}s",
             f"Velocidade: {info_simulacao.get('velocidade', 1.0)}x"
         ])
         y_texto += 70
-        
-        # Informações de veículos
+
+        # Seção VEÍCULOS
         self._desenhar_secao(superficie_painel, "VEÍCULOS", y_texto, [
             f"Ativos: {estatisticas['veiculos_ativos']}",
             f"Total Gerado: {estatisticas['veiculos_total']}",
             f"Concluídos: {estatisticas['veiculos_concluidos']}"
         ])
         y_texto += 90
-        
-        # Métricas de desempenho
+
+        # Seção DESEMPENHO
         self._desenhar_secao(superficie_painel, "DESEMPENHO", y_texto, [
             f"Tempo Médio de Viagem: {estatisticas['tempo_viagem_medio']:.1f}s",
             f"Tempo Médio Parado: {estatisticas['tempo_parado_medio']:.1f}s",
             f"Eficiência: {self._calcular_eficiencia(estatisticas):.1f}%"
         ])
         y_texto += 90
-        
-        # Heurística atual
+
+        # Seção SCORE
+        score = info_simulacao.get('score', 0.0)
+        self._desenhar_secao(superficie_painel, "SCORE", y_texto, [
+            f"Score: {score:.1f}/100"
+        ])
+        y_texto += 40
+
+        # Seção CONTROLE (Heurística atual)
         self._desenhar_secao(superficie_painel, "CONTROLE", y_texto, [
             f"Heurística: {estatisticas['heuristica']}",
             f"Estado: {info_simulacao.get('estado', 'Executando')}"
         ])
-        
-        # Desenha o painel na tela
+
+        # Blit final do painel
         self.tela.blit(superficie_painel, (x_painel, y_painel))
     
     def _desenhar_secao(self, superficie: pygame.Surface, titulo: str, y_inicial: int, 

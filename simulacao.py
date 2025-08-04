@@ -30,6 +30,31 @@ class GerenciadorMetricas:
             'heuristica_atual': None,
             'dados_temporais': []
         }
+
+    def calcular_score(self, heuristica: TipoHeuristica) -> float:
+        """
+        Calcula um score normalizado para uma heurística, combinando:
+          - Tempo de viagem médio (peso 50%)
+          - Tempo parado médio   (peso 30%)
+          - Throughput           (peso 20%)
+        Score final entre 0 e 100 (quanto maior, melhor).
+        """
+        m = self.metricas_por_heuristica[heuristica]
+        if not m['tempo_viagem'] or not m['veiculos_processados']:
+            return 0.0
+
+        # Médias históricas
+        tm = sum(m['tempo_viagem']) / len(m['tempo_viagem'])
+        tp = sum(m['tempo_parado']) / len(m['tempo_parado'])
+        v  = m['veiculos_processados']
+
+        # Normalizações (você pode ajustar maximos esperados)
+        tm_norm = max(0, min(1, 1 - tm / 10))       # assume 10s como pior caso
+        tp_norm = max(0, min(1, 1 - tp / 5))        # assume 5s como pior caso
+        v_norm  = max(0, min(1, v / 200))           # assume 200 veículos como alto throughput
+
+        score = (0.5 * tm_norm + 0.3 * tp_norm + 0.2 * v_norm) * 100
+        return score
     
     def registrar_metricas(self, estatisticas: Dict, heuristica: TipoHeuristica) -> None:
         """Registra métricas para análise posterior."""
@@ -72,6 +97,10 @@ class GerenciadorMetricas:
                 'inicio': self.sessao_atual['inicio'].isoformat(),
                 'fim': datetime.now().isoformat(),
                 'duracao_minutos': (datetime.now() - self.sessao_atual['inicio']).seconds / 60
+            },
+            'scores': {
+                h.name: self.calcular_score(h)
+                for h in self.metricas_por_heuristica
             },
             'comparacao_heuristicas': self.obter_comparacao(),
             'configuracoes': {
@@ -271,7 +300,8 @@ class Simulacao:
         info_simulacao = {
             'velocidade': self.multiplicador_velocidade,
             'estado': 'Pausado' if self.pausado else 'Executando',
-            'fps': self.renderizador.obter_fps()
+            'fps': self.renderizador.obter_fps(),
+            'score': self.gerenciador_metricas.calcular_score(self.heuristica_atual)
         }
         
         # Renderiza a malha

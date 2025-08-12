@@ -1,5 +1,6 @@
 """
 Módulo de semáforo com suporte a múltiplas heurísticas de controle.
+Sistema com vias de mão única: Horizontal (Leste→Oeste) e Vertical (Norte→Sul)
 """
 from typing import Tuple, Dict, List, Optional
 from enum import Enum
@@ -8,7 +9,7 @@ from configuracao import CONFIG, EstadoSemaforo, Direcao, TipoHeuristica
 
 
 class Semaforo:
-    """Representa um semáforo com controle inteligente."""
+    """Representa um semáforo com controle inteligente para vias de mão única."""
     
     def __init__(self, posicao: Tuple[float, float], direcao: Direcao, id_cruzamento: Tuple[int, int]):
         """
@@ -16,17 +17,17 @@ class Semaforo:
         
         Args:
             posicao: Posição (x, y) do semáforo
-            direcao: Direção do tráfego que o semáforo controla
+            direcao: Direção do tráfego que o semáforo controla (NORTE ou LESTE)
             id_cruzamento: ID do cruzamento ao qual pertence
         """
         self.posicao = posicao
         self.direcao = direcao
         self.id_cruzamento = id_cruzamento
         
-        # Estado inicial baseado na direção para evitar conflitos
-        if direcao in [Direcao.NORTE, Direcao.SUL]:
+        # Estado inicial - alterna entre direções para evitar conflitos
+        if direcao == Direcao.NORTE:
             self.estado = EstadoSemaforo.VERDE
-        else:
+        else:  # Direcao.LESTE
             self.estado = EstadoSemaforo.VERMELHO
         
         self.tempo_no_estado = 0
@@ -74,7 +75,7 @@ class Semaforo:
         elif self.estado == EstadoSemaforo.AMARELO:
             self._mudar_para_estado(EstadoSemaforo.VERMELHO)
         elif self.estado == EstadoSemaforo.VERMELHO:
-            # Não muda automaticamente para verde - isso é controlado pelo gerenciador
+            # Não muda automaticamente - controlado pelo gerenciador
             pass
     
     def _mudar_para_estado(self, novo_estado: EstadoSemaforo) -> None:
@@ -99,32 +100,34 @@ class Semaforo:
             self.tempo_maximo_estado = tempo
     
     def obter_posicao_parada(self) -> Tuple[float, float]:
-        """Retorna a posição onde os veículos devem parar."""
+        """Retorna a posição onde os veículos devem parar - MÃO ÚNICA."""
         offset = CONFIG.DISTANCIA_PARADA_SEMAFORO
         
         if self.direcao == Direcao.NORTE:
+            # Veículos vindo do norte param antes do cruzamento
             return (self.posicao[0], self.posicao[1] - offset)
-        elif self.direcao == Direcao.SUL:
-            return (self.posicao[0], self.posicao[1] + offset)
         elif self.direcao == Direcao.LESTE:
+            # Veículos vindo do leste param antes do cruzamento
             return (self.posicao[0] - offset, self.posicao[1])
-        elif self.direcao == Direcao.OESTE:
-            return (self.posicao[0] + offset, self.posicao[1])
+        
+        return self.posicao
     
     def desenhar(self, tela: pygame.Surface) -> None:
-        """Desenha o semáforo na tela com visual aprimorado."""
+        """Desenha o semáforo na tela com visual aprimorado - MÃO ÚNICA."""
         # Dimensões da caixa do semáforo
         largura = CONFIG.TAMANHO_SEMAFORO * 3 + CONFIG.ESPACAMENTO_SEMAFORO * 2
         altura = CONFIG.TAMANHO_SEMAFORO + 8
         
-        # Posição da caixa
-        if self.direcao in [Direcao.NORTE, Direcao.SUL]:
+        # Posição da caixa - ajustada para mão única
+        if self.direcao == Direcao.NORTE:
+            # Semáforo horizontal para tráfego vertical
             rect_caixa = pygame.Rect(
                 self.posicao[0] - largura // 2,
                 self.posicao[1] - altura // 2,
                 largura, altura
             )
-        else:
+        else:  # Direcao.LESTE
+            # Semáforo vertical para tráfego horizontal
             rect_caixa = pygame.Rect(
                 self.posicao[0] - altura // 2,
                 self.posicao[1] - largura // 2,
@@ -145,7 +148,7 @@ class Semaforo:
         # Desenha as luzes
         raio = CONFIG.TAMANHO_SEMAFORO // 2 - 1
         
-        if self.direcao in [Direcao.NORTE, Direcao.SUL]:
+        if self.direcao == Direcao.NORTE:
             # Semáforo horizontal
             x_base = rect_caixa.x + CONFIG.TAMANHO_SEMAFORO // 2 + 4
             y_centro = rect_caixa.centery
@@ -157,7 +160,7 @@ class Semaforo:
                 # Adiciona brilho se a luz estiver ativa
                 if self.estado == estado:
                     pygame.draw.circle(tela, cor, (x, y_centro), raio - 2, 2)
-        else:
+        else:  # Direcao.LESTE
             # Semáforo vertical
             x_centro = rect_caixa.centerx
             y_base = rect_caixa.y + CONFIG.TAMANHO_SEMAFORO // 2 + 4
@@ -172,7 +175,7 @@ class Semaforo:
 
 
 class GerenciadorSemaforos:
-    """Gerencia todos os semáforos com suporte a heurísticas."""
+    """Gerencia todos os semáforos com suporte a heurísticas - MÃO ÚNICA."""
     
     def __init__(self, heuristica: TipoHeuristica = TipoHeuristica.TEMPO_FIXO):
         """
@@ -227,7 +230,6 @@ class GerenciadorSemaforos:
                     sem._mudar_para_estado(EstadoSemaforo.VERMELHO)
                 elif sem.estado == EstadoSemaforo.VERMELHO:
                     sem._mudar_para_estado(EstadoSemaforo.VERDE)
-
     
     def atualizar(self, densidade_por_cruzamento: Dict[Tuple[int, int], Dict[Direcao, int]]) -> None:
         """
@@ -248,7 +250,7 @@ class GerenciadorSemaforos:
             self._atualizar_wave_green()
     
     def _atualizar_tempo_fixo(self) -> None:
-        """Atualização com tempos fixos e alternância simples."""
+        """Atualização com tempos fixos e alternância simples - MÃO ÚNICA."""
         for id_cruzamento, semaforos_cruzamento in self.semaforos.items():
             # Atualiza cada semáforo
             for semaforo in semaforos_cruzamento.values():
@@ -256,37 +258,37 @@ class GerenciadorSemaforos:
                 if mudou:
                     self.estatisticas_globais['mudancas_estado'] += 1
             
-            # Verifica se precisa alternar (quando um fica vermelho, o outro fica verde)
-            self._verificar_alternancia(semaforos_cruzamento)
+            # Verifica alternância simples entre Norte e Leste
+            self._verificar_alternancia_mao_unica(semaforos_cruzamento)
     
     def _atualizar_adaptativa_simples(self, densidade: Dict) -> None:
-        """Atualização adaptativa baseada em densidade simples."""
+        """Atualização adaptativa baseada em densidade simples - MÃO ÚNICA."""
         for id_cruzamento, semaforos_cruzamento in self.semaforos.items():
             densidade_cruzamento = densidade.get(id_cruzamento, {})
             
-            # Calcula qual direção tem mais veículos
-            densidade_ns = densidade_cruzamento.get(Direcao.NORTE, 0) + densidade_cruzamento.get(Direcao.SUL, 0)
-            densidade_lo = densidade_cruzamento.get(Direcao.LESTE, 0) + densidade_cruzamento.get(Direcao.OESTE, 0)
+            # Calcula densidade para cada direção
+            densidade_norte = densidade_cruzamento.get(Direcao.NORTE, 0)
+            densidade_leste = densidade_cruzamento.get(Direcao.LESTE, 0)
             
             # Ajusta tempos baseado na densidade
             for direcao, semaforo in semaforos_cruzamento.items():
-                if direcao in [Direcao.NORTE, Direcao.SUL]:
-                    if densidade_ns > densidade_lo * 1.5:
+                if direcao == Direcao.NORTE:
+                    if densidade_norte > densidade_leste * 1.5:
                         semaforo.definir_tempo_verde(CONFIG.TEMPO_VERDE_DENSIDADE_ALTA)
                     else:
                         semaforo.definir_tempo_verde(CONFIG.TEMPO_VERDE_DENSIDADE_MEDIA)
-                else:
-                    if densidade_lo > densidade_ns * 1.5:
+                elif direcao == Direcao.LESTE:
+                    if densidade_leste > densidade_norte * 1.5:
                         semaforo.definir_tempo_verde(CONFIG.TEMPO_VERDE_DENSIDADE_ALTA)
                     else:
                         semaforo.definir_tempo_verde(CONFIG.TEMPO_VERDE_DENSIDADE_MEDIA)
                 
                 semaforo.atualizar()
             
-            self._verificar_alternancia(semaforos_cruzamento)
+            self._verificar_alternancia_mao_unica(semaforos_cruzamento)
     
     def _atualizar_adaptativa_densidade(self, densidade: Dict) -> None:
-        """Atualização adaptativa com análise detalhada de densidade."""
+        """Atualização adaptativa com análise detalhada de densidade - MÃO ÚNICA."""
         config = self.config_heuristica
         config['tempo_desde_avaliacao'] += 1
         
@@ -300,13 +302,13 @@ class GerenciadorSemaforos:
                 densidade_cruzamento = densidade.get(id_cruzamento, {})
                 self._ajustar_tempos_por_densidade(semaforos_cruzamento, densidade_cruzamento)
             
-            self._verificar_alternancia(semaforos_cruzamento)
+            self._verificar_alternancia_mao_unica(semaforos_cruzamento)
         
         if config['tempo_desde_avaliacao'] >= config['intervalo_avaliacao']:
             config['tempo_desde_avaliacao'] = 0
     
     def _atualizar_wave_green(self) -> None:
-        """Atualização com onda verde para fluxo contínuo."""
+        """Atualização com onda verde para fluxo contínuo - MÃO ÚNICA."""
         config = self.config_heuristica
         
         for id_cruzamento, semaforos_cruzamento in self.semaforos.items():
@@ -316,74 +318,70 @@ class GerenciadorSemaforos:
             # Determina fase atual considerando offset
             fase_ajustada = (self.tempo_ciclo + offset) % 480  # Ciclo completo de 8 segundos
             
-            # Define estados baseado na fase
-            if fase_ajustada < 180:  # Primeiros 3 segundos
-                # Direção prioritária verde
-                for direcao, semaforo in semaforos_cruzamento.items():
-                    if direcao == config['direcao_onda'] or direcao == self._direcao_oposta(config['direcao_onda']):
-                        if semaforo.estado != EstadoSemaforo.VERDE:
-                            semaforo.forcar_mudanca(EstadoSemaforo.VERDE)
-                    else:
-                        if semaforo.estado != EstadoSemaforo.VERMELHO:
-                            semaforo.forcar_mudanca(EstadoSemaforo.VERMELHO)
+            # Define estados baseado na fase - simplificado para mão única
+            if fase_ajustada < 180:  # Primeiros 3 segundos - prioridade horizontal
+                # Leste verde, Norte vermelho
+                if Direcao.LESTE in semaforos_cruzamento:
+                    if semaforos_cruzamento[Direcao.LESTE].estado != EstadoSemaforo.VERDE:
+                        semaforos_cruzamento[Direcao.LESTE].forcar_mudanca(EstadoSemaforo.VERDE)
+                if Direcao.NORTE in semaforos_cruzamento:
+                    if semaforos_cruzamento[Direcao.NORTE].estado != EstadoSemaforo.VERMELHO:
+                        semaforos_cruzamento[Direcao.NORTE].forcar_mudanca(EstadoSemaforo.VERMELHO)
             elif fase_ajustada < 240:  # 1 segundo amarelo
-                for direcao, semaforo in semaforos_cruzamento.items():
-                    if direcao == config['direcao_onda'] or direcao == self._direcao_oposta(config['direcao_onda']):
-                        if semaforo.estado == EstadoSemaforo.VERDE:
-                            semaforo.forcar_mudanca(EstadoSemaforo.AMARELO)
-            elif fase_ajustada < 420:  # 3 segundos para direção perpendicular
-                for direcao, semaforo in semaforos_cruzamento.items():
-                    if direcao in [Direcao.NORTE, Direcao.SUL]:
-                        if semaforo.estado != EstadoSemaforo.VERDE:
-                            semaforo.forcar_mudanca(EstadoSemaforo.VERDE)
-                    else:
-                        if semaforo.estado != EstadoSemaforo.VERMELHO:
-                            semaforo.forcar_mudanca(EstadoSemaforo.VERMELHO)
+                if Direcao.LESTE in semaforos_cruzamento:
+                    if semaforos_cruzamento[Direcao.LESTE].estado == EstadoSemaforo.VERDE:
+                        semaforos_cruzamento[Direcao.LESTE].forcar_mudanca(EstadoSemaforo.AMARELO)
+            elif fase_ajustada < 420:  # 3 segundos - prioridade vertical
+                # Norte verde, Leste vermelho
+                if Direcao.NORTE in semaforos_cruzamento:
+                    if semaforos_cruzamento[Direcao.NORTE].estado != EstadoSemaforo.VERDE:
+                        semaforos_cruzamento[Direcao.NORTE].forcar_mudanca(EstadoSemaforo.VERDE)
+                if Direcao.LESTE in semaforos_cruzamento:
+                    if semaforos_cruzamento[Direcao.LESTE].estado != EstadoSemaforo.VERMELHO:
+                        semaforos_cruzamento[Direcao.LESTE].forcar_mudanca(EstadoSemaforo.VERMELHO)
             else:  # Último segundo amarelo
-                for direcao, semaforo in semaforos_cruzamento.items():
-                    if direcao in [Direcao.NORTE, Direcao.SUL]:
-                        if semaforo.estado == EstadoSemaforo.VERDE:
-                            semaforo.forcar_mudanca(EstadoSemaforo.AMARELO)
+                if Direcao.NORTE in semaforos_cruzamento:
+                    if semaforos_cruzamento[Direcao.NORTE].estado == EstadoSemaforo.VERDE:
+                        semaforos_cruzamento[Direcao.NORTE].forcar_mudanca(EstadoSemaforo.AMARELO)
             
             # Atualiza os semáforos
             for semaforo in semaforos_cruzamento.values():
                 semaforo.atualizar()
     
-    def _verificar_alternancia(self, semaforos: Dict[Direcao, Semaforo]) -> None:
-        """Verifica e corrige a alternância entre semáforos perpendiculares."""
-        # Agrupa por eixo
-        semaforos_ns = [s for d, s in semaforos.items() if d in [Direcao.NORTE, Direcao.SUL]]
-        semaforos_lo = [s for d, s in semaforos.items() if d in [Direcao.LESTE, Direcao.OESTE]]
+    def _verificar_alternancia_mao_unica(self, semaforos: Dict[Direcao, Semaforo]) -> None:
+        """Verifica e corrige a alternância entre semáforos - MÃO ÚNICA."""
+        # Apenas duas direções: NORTE e LESTE
+        semaforo_norte = semaforos.get(Direcao.NORTE)
+        semaforo_leste = semaforos.get(Direcao.LESTE)
         
-        # Verifica se algum eixo acabou de ficar vermelho
-        ns_todos_vermelhos = all(s.estado == EstadoSemaforo.VERMELHO for s in semaforos_ns)
-        lo_todos_vermelhos = all(s.estado == EstadoSemaforo.VERMELHO for s in semaforos_lo)
+        if not semaforo_norte or not semaforo_leste:
+            return
         
-        # Se um eixo está todo vermelho e o outro também, libera o que esperou mais
-        if ns_todos_vermelhos and lo_todos_vermelhos:
-            tempo_espera_ns = sum(s.tempo_no_estado for s in semaforos_ns)
-            tempo_espera_lo = sum(s.tempo_no_estado for s in semaforos_lo)
+        # Se ambos estão vermelhos, libera o que esperou mais
+        if (semaforo_norte.estado == EstadoSemaforo.VERMELHO and 
+            semaforo_leste.estado == EstadoSemaforo.VERMELHO):
             
-            if tempo_espera_ns > tempo_espera_lo:
-                for s in semaforos_ns:
-                    s.forcar_mudanca(EstadoSemaforo.VERDE)
+            if semaforo_norte.tempo_no_estado > semaforo_leste.tempo_no_estado:
+                semaforo_norte.forcar_mudanca(EstadoSemaforo.VERDE)
             else:
-                for s in semaforos_lo:
-                    s.forcar_mudanca(EstadoSemaforo.VERDE)
+                semaforo_leste.forcar_mudanca(EstadoSemaforo.VERDE)
         
-        # Se um eixo acabou de ficar todo vermelho, o outro deve ficar verde
-        elif ns_todos_vermelhos and any(s.tempo_no_estado < 2 for s in semaforos_ns):
-            for s in semaforos_lo:
-                if s.estado == EstadoSemaforo.VERMELHO:
-                    s.forcar_mudanca(EstadoSemaforo.VERDE)
-        elif lo_todos_vermelhos and any(s.tempo_no_estado < 2 for s in semaforos_lo):
-            for s in semaforos_ns:
-                if s.estado == EstadoSemaforo.VERMELHO:
-                    s.forcar_mudanca(EstadoSemaforo.VERDE)
+        # Se um acabou de ficar vermelho, o outro deve ficar verde
+        elif (semaforo_norte.estado == EstadoSemaforo.VERMELHO and 
+              semaforo_norte.tempo_no_estado < 2):
+            if semaforo_leste.estado == EstadoSemaforo.VERMELHO:
+                semaforo_leste.forcar_mudanca(EstadoSemaforo.VERDE)
+        elif (semaforo_leste.estado == EstadoSemaforo.VERMELHO and 
+              semaforo_leste.tempo_no_estado < 2):
+            if semaforo_norte.estado == EstadoSemaforo.VERMELHO:
+                semaforo_norte.forcar_mudanca(EstadoSemaforo.VERDE)
     
     def _ajustar_tempos_por_densidade(self, semaforos: Dict[Direcao, Semaforo], densidade: Dict[Direcao, int]) -> None:
-        """Ajusta os tempos dos semáforos baseado na densidade."""
+        """Ajusta os tempos dos semáforos baseado na densidade - MÃO ÚNICA."""
         for direcao, semaforo in semaforos.items():
+            if direcao not in CONFIG.DIRECOES_PERMITIDAS:
+                continue
+                
             qtd_veiculos = densidade.get(direcao, 0)
             
             if qtd_veiculos <= CONFIG.LIMIAR_DENSIDADE_BAIXA:
@@ -394,16 +392,6 @@ class GerenciadorSemaforos:
                 tempo_verde = CONFIG.TEMPO_VERDE_DENSIDADE_ALTA
             
             semaforo.definir_tempo_verde(tempo_verde)
-    
-    def _direcao_oposta(self, direcao: Direcao) -> Direcao:
-        """Retorna a direção oposta."""
-        opostos = {
-            Direcao.NORTE: Direcao.SUL,
-            Direcao.SUL: Direcao.NORTE,
-            Direcao.LESTE: Direcao.OESTE,
-            Direcao.OESTE: Direcao.LESTE
-        }
-        return opostos[direcao]
     
     def mudar_heuristica(self, nova_heuristica: TipoHeuristica) -> None:
         """Muda a heurística de controle."""

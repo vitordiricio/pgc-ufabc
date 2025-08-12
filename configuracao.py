@@ -1,17 +1,18 @@
 """
 Configurações para a simulação de malha viária urbana com múltiplos cruzamentos.
+Sistema com vias de mão única: Horizontal (Leste→Oeste) e Vertical (Norte→Sul)
 """
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple
+from typing import Dict, List
 from enum import Enum, auto
 
 
 class Direcao(Enum):
-    """Enumeração das direções possíveis."""
-    NORTE = auto()  # De cima para baixo (↓)
-    SUL = auto()    # De baixo para cima (↑)
-    LESTE = auto()  # Da esquerda para direita (→)
-    OESTE = auto()  # Da direita para esquerda (←)
+    """Enumeração das direções possíveis - VIAS DE MÃO ÚNICA."""
+    NORTE = auto()  # Movimento de cima para baixo (↓) - Norte→Sul
+    SUL = auto()    # Movimento de baixo para cima (↑) - Sul→Norte (DESATIVADO)
+    LESTE = auto()  # Movimento da esquerda para direita (→) - Leste→Oeste
+    OESTE = auto()  # Movimento da direita para esquerda (←) - Oeste→Leste (DESATIVADO)
 
 
 class EstadoSemaforo(Enum):
@@ -32,7 +33,7 @@ class TipoHeuristica(Enum):
 
 @dataclass
 class Configuracao:
-    """Configuração para a simulação."""
+    """Configuração para a simulação com vias de mão única."""
     # Configurações de tela
     LARGURA_TELA: int = 1400
     ALTURA_TELA: int = 900
@@ -67,24 +68,31 @@ class Configuracao:
         (255, 20, 147)    # Rosa
     ])
     
-    # Configurações da rua
-    LARGURA_RUA: int = 60
-    LARGURA_FAIXA: int = 30
+    # Configurações da rua - AGORA MÃO ÚNICA
+    LARGURA_RUA: int = 40  # Reduzida pois só tem uma direção
+    LARGURA_FAIXA: int = 40  # Uma única faixa por direção
     
-    # Pontos de spawn de veículos
+    # Sistema de mão única: define quais direções são permitidas
+    DIRECOES_PERMITIDAS: List[Direcao] = field(default_factory=lambda: [
+        Direcao.NORTE,  # Vertical: Norte→Sul (de cima para baixo)
+        Direcao.LESTE   # Horizontal: Leste→Oeste (da esquerda para direita)
+    ])
+    
+    # Pontos de spawn de veículos - APENAS NAS BORDAS CORRETAS
+    # Para mão única: Norte spawn no topo, Leste spawn na esquerda
     PONTOS_SPAWN: Dict[str, bool] = field(default_factory=lambda: {
-        'NORTE': True,
-        'SUL': True,
-        'LESTE': True,
-        'OESTE': True
+        'NORTE': True,   # Spawn no topo (vai para baixo)
+        'SUL': False,    # Desativado - mão única
+        'LESTE': True,   # Spawn na esquerda (vai para direita)
+        'OESTE': False   # Desativado - mão única
     })
     
     # Configurações de veículos
     LARGURA_VEICULO: int = 25
     ALTURA_VEICULO: int = 35
-    TAXA_GERACAO_VEICULO: float = 0.015
-    VELOCIDADE_VEICULO: float = 1.0
-    VELOCIDADE_MAX_VEICULO: float = 2.0
+    TAXA_GERACAO_VEICULO: float = 0.01  # Aumentada um pouco já que temos menos pontos de spawn
+    VELOCIDADE_VEICULO: float = 0.5
+    VELOCIDADE_MAX_VEICULO: float = 1.0
     VELOCIDADE_MIN_VEICULO: float = 0.0
     ACELERACAO_VEICULO: float = 0.15
     DESACELERACAO_VEICULO: float = 0.25
@@ -123,6 +131,7 @@ class Configuracao:
     MOSTRAR_GRID: bool = True
     MOSTRAR_ESTATISTICAS: bool = True
     MOSTRAR_INFO_VEICULO: bool = False
+    MOSTRAR_DIRECAO_FLUXO: bool = True  
     TAMANHO_FONTE_PEQUENA: int = 14
     TAMANHO_FONTE_MEDIA: int = 18
     TAMANHO_FONTE_GRANDE: int = 24

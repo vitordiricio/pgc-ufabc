@@ -1,16 +1,17 @@
 """
 Módulo de veículos para a simulação de malha viária com múltiplos cruzamentos.
+Sistema com vias de mão única: Horizontal (Leste→Oeste) e Vertical (Norte→Sul)
 """
 import random
 import math
-from typing import Optional, Tuple, List, Dict
+from typing import Tuple
 import pygame
 from configuracao import CONFIG, Direcao, EstadoSemaforo
 from semaforo import Semaforo
 
 
 class Veiculo:
-    """Representa um veículo na simulação com física e comportamento realista."""
+    """Representa um veículo na simulação com física e comportamento realista - MÃO ÚNICA."""
     
     # Contador estático para IDs únicos
     _contador_id = 0
@@ -20,10 +21,14 @@ class Veiculo:
         Inicializa um veículo.
         
         Args:
-            direcao: Direção do veículo
+            direcao: Direção do veículo (apenas NORTE ou LESTE em mão única)
             posicao: Posição inicial (x, y) do veículo
             id_cruzamento_origem: ID do cruzamento onde o veículo foi gerado
         """
+        # Valida direção - apenas direções permitidas
+        if direcao not in CONFIG.DIRECOES_PERMITIDAS:
+            raise ValueError(f"Direção {direcao} não permitida. Use apenas {CONFIG.DIRECOES_PERMITIDAS}")
+        
         # ID único para o veículo
         Veiculo._contador_id += 1
         self.id = Veiculo._contador_id
@@ -69,16 +74,16 @@ class Veiculo:
     
     def _atualizar_rect(self) -> None:
         """Atualiza o retângulo de colisão do veículo."""
-        if self.direcao in [Direcao.NORTE, Direcao.SUL]:
-            # Veículos verticais
+        if self.direcao == Direcao.NORTE:
+            # Veículo vertical (Norte→Sul)
             self.rect = pygame.Rect(
                 self.posicao[0] - self.largura // 2,
                 self.posicao[1] - self.altura // 2,
                 self.largura,
                 self.altura
             )
-        else:
-            # Veículos horizontais
+        elif self.direcao == Direcao.LESTE:
+            # Veículo horizontal (Leste→Oeste)
             self.rect = pygame.Rect(
                 self.posicao[0] - self.altura // 2,
                 self.posicao[1] - self.largura // 2,
@@ -108,16 +113,14 @@ class Veiculo:
         self.velocidade = max(CONFIG.VELOCIDADE_MIN_VEICULO, 
                             min(CONFIG.VELOCIDADE_MAX_VEICULO, self.velocidade))
         
-        # Move o veículo
+        # Move o veículo - MÃO ÚNICA
         dx, dy = 0, 0
         if self.direcao == Direcao.NORTE:
+            # Norte→Sul (de cima para baixo)
             dy = self.velocidade
-        elif self.direcao == Direcao.SUL:
-            dy = -self.velocidade
         elif self.direcao == Direcao.LESTE:
+            # Leste→Oeste (da esquerda para direita)
             dx = self.velocidade
-        elif self.direcao == Direcao.OESTE:
-            dx = -self.velocidade
         
         self.posicao[0] += dx
         self.posicao[1] += dy
@@ -163,11 +166,10 @@ class Veiculo:
             self.aceleracao_atual = CONFIG.ACELERACAO_VEICULO
 
         elif semaforo.estado == EstadoSemaforo.AMARELO:
-            # Semáforo amarelo: decide se passa ou freia de emergência
+            # Semáforo amarelo: decide se passa ou freia
             tempo_ate_linha = self.distancia_semaforo / max(self.velocidade, 0.1)
-            tempo_ate_parar = self.velocidade / CONFIG.DESACELERACAO_EMERGENCIA
             if tempo_ate_linha < 1.0 and self.velocidade > CONFIG.VELOCIDADE_VEICULO * 0.7:
-                # Perto demais e rápido demais: mantém velocidade para não parar no meio
+                # Perto demais e rápido demais: mantém velocidade
                 self.pode_passar_amarelo = True
                 self.aceleracao_atual = 0
             else:
@@ -175,14 +177,12 @@ class Veiculo:
                 self._aplicar_frenagem_para_parada(self.distancia_semaforo)
 
         elif semaforo.estado == EstadoSemaforo.VERMELHO:
-            # Semáforo vermelho: para completamente ao chegar na linha
+            # Semáforo vermelho: para completamente
             self.aguardando_semaforo = True
-            # Se estiver dentro da zona de parada, zera velocidade imediatamente
             if self.distancia_semaforo <= CONFIG.DISTANCIA_PARADA_SEMAFORO:
                 self.velocidade = 0.0
                 self.aceleracao_atual = 0.0
             else:
-                # Senão, freia suavemente para atingir exatamente 0 na linha
                 self._aplicar_frenagem_para_parada(self.distancia_semaforo)
 
     def processar_veiculo_frente(self, veiculo_frente: 'Veiculo') -> None:
@@ -215,34 +215,34 @@ class Veiculo:
                 self.aceleracao_atual = 0
     
     def _calcular_distancia_ate_ponto(self, ponto: Tuple[float, float]) -> float:
-        """Calcula a distância até um ponto específico."""
+        """Calcula a distância até um ponto específico - MÃO ÚNICA."""
         if self.direcao == Direcao.NORTE:
+            # Norte→Sul: distância é diferença em Y (positiva)
             return max(0, ponto[1] - self.posicao[1])
-        elif self.direcao == Direcao.SUL:
-            return max(0, self.posicao[1] - ponto[1])
         elif self.direcao == Direcao.LESTE:
+            # Leste→Oeste: distância é diferença em X (positiva)
             return max(0, ponto[0] - self.posicao[0])
-        elif self.direcao == Direcao.OESTE:
-            return max(0, self.posicao[0] - ponto[0])
         return float('inf')
     
     def _passou_da_linha(self, ponto: Tuple[float, float]) -> bool:
-        """Verifica se o veículo já passou de um ponto."""
+        """Verifica se o veículo já passou de um ponto - MÃO ÚNICA."""
         margem = 10
         if self.direcao == Direcao.NORTE:
+            # Norte→Sul: passou se Y atual > Y do ponto
             return self.posicao[1] > ponto[1] + margem
-        elif self.direcao == Direcao.SUL:
-            return self.posicao[1] < ponto[1] - margem
         elif self.direcao == Direcao.LESTE:
+            # Leste→Oeste: passou se X atual > X do ponto
             return self.posicao[0] > ponto[0] + margem
-        elif self.direcao == Direcao.OESTE:
-            return self.posicao[0] < ponto[0] - margem
         return False
     
     def _calcular_distancia_para_veiculo(self, outro: 'Veiculo') -> float:
-        """Calcula a distância até outro veículo considerando as dimensões."""
-        # Verifica se estão na mesma faixa
-        if not self._mesma_faixa(outro):
+        """Calcula a distância até outro veículo - MÃO ÚNICA."""
+        # Em vias de mão única, todos os veículos na mesma via vão na mesma direção
+        if self.direcao != outro.direcao:
+            return float('inf')
+        
+        # Verifica se estão na mesma via
+        if not self._mesma_via(outro):
             return float('inf')
         
         # Calcula distância centro a centro
@@ -253,26 +253,24 @@ class Veiculo:
         if self.direcao == Direcao.NORTE:
             if dy > 0:  # Outro está à frente
                 return dy - (self.altura + outro.altura) / 2
-        elif self.direcao == Direcao.SUL:
-            if dy < 0:  # Outro está à frente
-                return -dy - (self.altura + outro.altura) / 2
         elif self.direcao == Direcao.LESTE:
             if dx > 0:  # Outro está à frente
                 return dx - (self.altura + outro.altura) / 2
-        elif self.direcao == Direcao.OESTE:
-            if dx < 0:  # Outro está à frente
-                return -dx - (self.altura + outro.altura) / 2
         
         return float('inf')
     
-    def _mesma_faixa(self, outro: 'Veiculo') -> bool:
-        """Verifica se dois veículos estão na mesma faixa."""
-        tolerancia = CONFIG.LARGURA_FAIXA * 0.8
+    def _mesma_via(self, outro: 'Veiculo') -> bool:
+        """Verifica se dois veículos estão na mesma via - MÃO ÚNICA."""
+        tolerancia = CONFIG.LARGURA_RUA * 0.8
         
-        if self.direcao in [Direcao.NORTE, Direcao.SUL]:
+        if self.direcao == Direcao.NORTE:
+            # Mesma via vertical
             return abs(self.posicao[0] - outro.posicao[0]) < tolerancia
-        else:
+        elif self.direcao == Direcao.LESTE:
+            # Mesma via horizontal
             return abs(self.posicao[1] - outro.posicao[1]) < tolerancia
+        
+        return False
     
     def _calcular_velocidade_segura(self, distancia: float, velocidade_lider: float) -> float:
         """Calcula a velocidade segura baseada na distância e velocidade do veículo à frente."""
@@ -302,25 +300,12 @@ class Veiculo:
             else:
                 self.aceleracao_atual = 0
     
-    def obter_faixa(self) -> int:
-        """Retorna o índice da faixa em que o veículo está."""
-        if self.direcao in [Direcao.NORTE, Direcao.SUL]:
-            # Faixas verticais
-            faixa_esquerda = self.posicao[0] - CONFIG.LARGURA_FAIXA // 2
-            faixa_direita = self.posicao[0] + CONFIG.LARGURA_FAIXA // 2
-            return 0 if self.posicao[0] < (faixa_esquerda + faixa_direita) / 2 else 1
-        else:
-            # Faixas horizontais
-            faixa_superior = self.posicao[1] - CONFIG.LARGURA_FAIXA // 2
-            faixa_inferior = self.posicao[1] + CONFIG.LARGURA_FAIXA // 2
-            return 0 if self.posicao[1] < (faixa_superior + faixa_inferior) / 2 else 1
-    
     def desenhar(self, tela: pygame.Surface) -> None:
-        """Desenha o veículo na tela com visual aprimorado."""
+        """Desenha o veículo na tela com visual aprimorado - MÃO ÚNICA."""
         # Cria superfície para o veículo
-        if self.direcao in [Direcao.NORTE, Direcao.SUL]:
+        if self.direcao == Direcao.NORTE:
             superficie = pygame.Surface((self.largura, self.altura), pygame.SRCALPHA)
-        else:
+        else:  # Direcao.LESTE
             superficie = pygame.Surface((self.altura, self.largura), pygame.SRCALPHA)
         
         # Desenha o corpo do veículo
@@ -328,60 +313,49 @@ class Veiculo:
         
         # Adiciona detalhes (janelas)
         cor_janela = (200, 220, 255, 180)
-        if self.direcao in [Direcao.NORTE, Direcao.SUL]:
-            # Janela frontal
-            pygame.draw.rect(superficie, cor_janela, 
-                           (3, 3, self.largura - 6, self.altura * 0.3), 
-                           border_radius=2)
-            # Janela traseira
+        if self.direcao == Direcao.NORTE:
+            # Janela frontal (parte de baixo - direção do movimento)
             pygame.draw.rect(superficie, cor_janela, 
                            (3, self.altura * 0.7, self.largura - 6, self.altura * 0.25), 
                            border_radius=2)
-        else:
-            # Janela frontal
+            # Janela traseira (parte de cima)
             pygame.draw.rect(superficie, cor_janela, 
-                           (3, 3, self.altura * 0.3, self.largura - 6), 
+                           (3, 3, self.largura - 6, self.altura * 0.3), 
                            border_radius=2)
-            # Janela traseira
+        else:  # Direcao.LESTE
+            # Janela frontal (parte direita - direção do movimento)
             pygame.draw.rect(superficie, cor_janela, 
                            (self.altura * 0.7, 3, self.altura * 0.25, self.largura - 6), 
+                           border_radius=2)
+            # Janela traseira (parte esquerda)
+            pygame.draw.rect(superficie, cor_janela, 
+                           (3, 3, self.altura * 0.3, self.largura - 6), 
                            border_radius=2)
         
         # Adiciona luzes de freio se estiver freando
         if self.aceleracao_atual < -0.1:
             cor_freio = (255, 100, 100)
             if self.direcao == Direcao.NORTE:
-                pygame.draw.rect(superficie, cor_freio, 
-                               (2, self.altura - 4, 6, 3))
-                pygame.draw.rect(superficie, cor_freio, 
-                               (self.largura - 8, self.altura - 4, 6, 3))
-            elif self.direcao == Direcao.SUL:
-                pygame.draw.rect(superficie, cor_freio, 
-                               (2, 1, 6, 3))
-                pygame.draw.rect(superficie, cor_freio, 
-                               (self.largura - 8, 1, 6, 3))
+                # Luzes na parte de cima (traseira)
+                pygame.draw.rect(superficie, cor_freio, (2, 1, 6, 3))
+                pygame.draw.rect(superficie, cor_freio, (self.largura - 8, 1, 6, 3))
             elif self.direcao == Direcao.LESTE:
-                pygame.draw.rect(superficie, cor_freio, 
-                               (self.altura - 4, 2, 3, 6))
-                pygame.draw.rect(superficie, cor_freio, 
-                               (self.altura - 4, self.largura - 8, 3, 6))
-            elif self.direcao == Direcao.OESTE:
-                pygame.draw.rect(superficie, cor_freio, 
-                               (1, 2, 3, 6))
-                pygame.draw.rect(superficie, cor_freio, 
-                               (1, self.largura - 8, 3, 6))
+                # Luzes na parte esquerda (traseira)
+                pygame.draw.rect(superficie, cor_freio, (1, 2, 3, 6))
+                pygame.draw.rect(superficie, cor_freio, (1, self.largura - 8, 3, 6))
         
-        # Rotaciona se necessário
-        angulo = {
-            Direcao.NORTE: 0,
-            Direcao.SUL: 180,
-            Direcao.LESTE: -90,
-            Direcao.OESTE: 90
-        }[self.direcao]
+        # Adiciona faróis
+        cor_farol = (255, 255, 200, 150)
+        if self.direcao == Direcao.NORTE:
+            # Faróis na frente (parte de baixo)
+            pygame.draw.circle(superficie, cor_farol, (8, self.altura - 5), 3)
+            pygame.draw.circle(superficie, cor_farol, (self.largura - 8, self.altura - 5), 3)
+        elif self.direcao == Direcao.LESTE:
+            # Faróis na frente (parte direita)
+            pygame.draw.circle(superficie, cor_farol, (self.altura - 5, 8), 3)
+            pygame.draw.circle(superficie, cor_farol, (self.altura - 5, self.largura - 8), 3)
         
-        if angulo != 0:
-            superficie = pygame.transform.rotate(superficie, angulo)
-        
+        # Não precisa rotacionar pois já criamos na orientação correta
         # Desenha na tela
         rect = superficie.get_rect(center=(int(self.posicao[0]), int(self.posicao[1])))
         tela.blit(superficie, rect)
@@ -389,6 +363,6 @@ class Veiculo:
         # Debug info
         if CONFIG.MOSTRAR_INFO_VEICULO:
             fonte = pygame.font.SysFont('Arial', 10)
-            texto = f"V:{self.velocidade:.1f}"
+            texto = f"V:{self.velocidade:.1f} ID:{self.id}"
             superficie_texto = fonte.render(texto, True, CONFIG.BRANCO)
-            tela.blit(superficie_texto, (self.posicao[0] - 15, self.posicao[1] - 25))
+            tela.blit(superficie_texto, (self.posicao[0] - 20, self.posicao[1] - 25))

@@ -42,7 +42,7 @@ class Configuracao:
     # Configurações da grade de cruzamentos
     LINHAS_GRADE: int = 2
     COLUNAS_GRADE: int = 2
-    ESPACAMENTO_ENTRE_CRUZAMENTOS: int = 500
+    ESPACAMENTO_ENTRE_CRUZAMENTOS: int = 200
     
     # Cores
     PRETO: tuple[int, int, int] = (20, 20, 20)

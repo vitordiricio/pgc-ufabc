@@ -153,6 +153,28 @@ class Cruzamento:
         
         return True
     
+    def _determinar_cruzamento_veiculo(self, veiculo: Veiculo) -> Tuple[int, int]:
+        """
+        Determina qual cruzamento o veículo está mais próximo.
+        
+        Args:
+            veiculo: Veículo a verificar
+            
+        Returns:
+            ID do cruzamento mais próximo
+        """
+        # Calcula em qual cruzamento o veículo está baseado em sua posição
+        coluna = int((veiculo.posicao[0] - CONFIG.POSICAO_INICIAL_X + CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS / 2) / 
+                    CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS)
+        linha = int((veiculo.posicao[1] - CONFIG.POSICAO_INICIAL_Y + CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS / 2) / 
+                   CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS)
+        
+        # Limita aos valores válidos
+        coluna = max(0, min(coluna, CONFIG.COLUNAS_GRADE - 1))
+        linha = max(0, min(linha, CONFIG.LINHAS_GRADE - 1))
+        
+        return (linha, coluna)
+    
     def atualizar_veiculos(self, todos_veiculos: List[Veiculo]) -> None:
         """Atualiza o estado dos veículos no cruzamento."""
         # Limpa listas antigas
@@ -162,7 +184,12 @@ class Cruzamento:
         # Reorganiza veículos por direção e proximidade
         for veiculo in todos_veiculos:
             if veiculo.direcao in CONFIG.DIRECOES_PERMITIDAS and self._veiculo_proximo_ao_cruzamento(veiculo):
-                self.veiculos_por_direcao[veiculo.direcao].append(veiculo)
+                # Verifica se o veículo mudou de cruzamento
+                cruzamento_atual = self._determinar_cruzamento_veiculo(veiculo)
+                if cruzamento_atual == self.id:
+                    # Reset do controle de semáforo se mudou de cruzamento
+                    veiculo.resetar_controle_semaforo(self.id)
+                    self.veiculos_por_direcao[veiculo.direcao].append(veiculo)
         
         # Processa cada direção permitida
         for direcao in CONFIG.DIRECOES_PERMITIDAS:
@@ -182,10 +209,14 @@ class Cruzamento:
                 # Identifica veículo à frente
                 veiculo_frente = veiculos_ordenados[i-1] if i > 0 else None
                 
-                # Processa semáforo
-                if semaforo and not veiculo.passou_semaforo:
+                # Processa semáforo SEMPRE (independente do flag passou_semaforo)
+                # O controle interno do veículo vai decidir se deve processar ou não
+                if semaforo:
                     posicao_parada = semaforo.obter_posicao_parada()
-                    veiculo.processar_semaforo(semaforo, posicao_parada)
+                    
+                    # Verifica se o veículo está antes da linha de parada
+                    if self._veiculo_antes_da_linha(veiculo, posicao_parada):
+                        veiculo.processar_semaforo(semaforo, posicao_parada)
                 
                 # Processa veículo à frente
                 if veiculo_frente:
@@ -203,6 +234,28 @@ class Cruzamento:
             len(veiculos) for direcao, veiculos in self.veiculos_por_direcao.items()
             if direcao in CONFIG.DIRECOES_PERMITIDAS
         )
+    
+    def _veiculo_antes_da_linha(self, veiculo: Veiculo, posicao_parada: Tuple[float, float]) -> bool:
+        """
+        Verifica se o veículo está antes da linha de parada.
+        
+        Args:
+            veiculo: Veículo a verificar
+            posicao_parada: Posição da linha de parada
+            
+        Returns:
+            True se o veículo está antes da linha
+        """
+        margem = CONFIG.DISTANCIA_DETECCAO_SEMAFORO
+        
+        if veiculo.direcao == Direcao.NORTE:
+            # Norte→Sul: está antes se Y do veículo < Y da linha + margem
+            return veiculo.posicao[1] < posicao_parada[1] + margem
+        elif veiculo.direcao == Direcao.LESTE:
+            # Leste→Oeste: está antes se X do veículo < X da linha + margem
+            return veiculo.posicao[0] < posicao_parada[0] + margem
+        
+        return False
     
     def _veiculo_proximo_ao_cruzamento(self, veiculo: Veiculo) -> bool:
         """Verifica se um veículo está próximo o suficiente do cruzamento."""

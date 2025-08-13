@@ -4,7 +4,7 @@ Sistema com vias de mão única: Horizontal (Leste→Oeste) e Vertical (Norte→
 """
 import random
 import math
-from typing import Tuple
+from typing import Tuple, Optional
 import pygame
 from configuracao import CONFIG, Direcao, EstadoSemaforo
 from semaforo import Semaforo
@@ -58,8 +58,9 @@ class Veiculo:
         self.aguardando_semaforo = False
         self.em_desaceleracao = False
         
-        # Controle de semáforo
+        # Controle de semáforo - MELHORADO
         self.semaforo_proximo = None
+        self.ultimo_semaforo_processado = None  # Novo: rastreia qual semáforo já foi processado
         self.distancia_semaforo = float('inf')
         self.pode_passar_amarelo = False
         
@@ -90,6 +91,21 @@ class Veiculo:
                 self.altura,
                 self.largura
             )
+    
+    def resetar_controle_semaforo(self, novo_cruzamento_id: Optional[Tuple[int, int]] = None) -> None:
+        """
+        Reseta o controle de semáforo quando o veículo muda de cruzamento.
+        
+        Args:
+            novo_cruzamento_id: ID do novo cruzamento (opcional)
+        """
+        if novo_cruzamento_id and novo_cruzamento_id != self.id_cruzamento_atual:
+            self.id_cruzamento_atual = novo_cruzamento_id
+            self.passou_semaforo = False
+            self.aguardando_semaforo = False
+            self.pode_passar_amarelo = False
+            self.semaforo_proximo = None
+            self.distancia_semaforo = float('inf')
     
     def atualizar(self, dt: float = 1.0) -> None:
         """
@@ -145,17 +161,29 @@ class Veiculo:
             semaforo: Semáforo a ser processado
             posicao_parada: Posição onde o veículo deve parar
         """
-        if not semaforo or self.passou_semaforo:
-            # Sem semáforo ou já passou, acelera normalmente
+        if not semaforo:
+            # Sem semáforo, acelera normalmente
+            self.aceleracao_atual = CONFIG.ACELERACAO_VEICULO
+            return
+
+        # Verifica se é um novo semáforo
+        if self.ultimo_semaforo_processado != semaforo:
+            self.passou_semaforo = False
+            self.ultimo_semaforo_processado = semaforo
+            self.pode_passar_amarelo = False
+
+        # Se já passou deste semáforo específico, ignora
+        if self.passou_semaforo:
             self.aceleracao_atual = CONFIG.ACELERACAO_VEICULO
             return
 
         # Calcula distância até a linha de parada
         self.distancia_semaforo = self._calcular_distancia_ate_ponto(posicao_parada)
 
-        # Se já passou da linha de parada, ignora o semáforo
+        # Se já passou da linha de parada, marca como passado
         if self._passou_da_linha(posicao_parada):
             self.passou_semaforo = True
+            self.aguardando_semaforo = False
             self.aceleracao_atual = CONFIG.ACELERACAO_VEICULO
             return
 
@@ -167,22 +195,37 @@ class Veiculo:
 
         elif semaforo.estado == EstadoSemaforo.AMARELO:
             # Semáforo amarelo: decide se passa ou freia
-            tempo_ate_linha = self.distancia_semaforo / max(self.velocidade, 0.1)
-            if tempo_ate_linha < 1.0 and self.velocidade > CONFIG.VELOCIDADE_VEICULO * 0.7:
-                # Perto demais e rápido demais: mantém velocidade
-                self.pode_passar_amarelo = True
+            # Só permite passar amarelo se já estava em movimento e próximo
+            if self.pode_passar_amarelo:
+                # Já tinha decidido passar, mantém
                 self.aceleracao_atual = 0
             else:
-                # Freia para parar antes da linha
-                self._aplicar_frenagem_para_parada(self.distancia_semaforo)
+                # Avalia se pode passar
+                tempo_ate_linha = self.distancia_semaforo / max(self.velocidade, 0.1)
+                
+                # Só passa se estiver muito próximo E em velocidade suficiente
+                if (tempo_ate_linha < 1.0 and 
+                    self.velocidade > CONFIG.VELOCIDADE_VEICULO * 0.7 and 
+                    self.distancia_semaforo < CONFIG.DISTANCIA_PARADA_SEMAFORO * 3):
+                    # Perto demais para parar com segurança
+                    self.pode_passar_amarelo = True
+                    self.aceleracao_atual = 0
+                else:
+                    # Tem tempo para parar com segurança
+                    self._aplicar_frenagem_para_parada(self.distancia_semaforo)
+                    self.aguardando_semaforo = True
 
         elif semaforo.estado == EstadoSemaforo.VERMELHO:
-            # Semáforo vermelho: para completamente
+            # Semáforo vermelho: SEMPRE para
             self.aguardando_semaforo = True
+            self.pode_passar_amarelo = False  # Reset da permissão de passar amarelo
+            
             if self.distancia_semaforo <= CONFIG.DISTANCIA_PARADA_SEMAFORO:
+                # Muito próximo da linha, para imediatamente
                 self.velocidade = 0.0
                 self.aceleracao_atual = 0.0
             else:
+                # Aplica frenagem para parar antes da linha
                 self._aplicar_frenagem_para_parada(self.distancia_semaforo)
 
     def processar_veiculo_frente(self, veiculo_frente: 'Veiculo') -> None:
@@ -290,8 +333,12 @@ class Veiculo:
     def _aplicar_frenagem_para_parada(self, distancia: float) -> None:
         """Aplica frenagem suave para parar em uma distância específica."""
         if distancia < CONFIG.DISTANCIA_PARADA_SEMAFORO:
+            # Muito próximo, frenagem de emergência
             self.aceleracao_atual = -CONFIG.DESACELERACAO_EMERGENCIA
             self.velocidade_desejada = 0
+            # Força parada completa se muito próximo
+            if distancia < CONFIG.DISTANCIA_PARADA_SEMAFORO / 2:
+                self.velocidade = 0.0
         else:
             # Cálculo de desaceleração necessária: v² = v₀² + 2*a*d
             if self.velocidade > 0.1:
@@ -363,6 +410,8 @@ class Veiculo:
         # Debug info
         if CONFIG.MOSTRAR_INFO_VEICULO:
             fonte = pygame.font.SysFont('Arial', 10)
-            texto = f"V:{self.velocidade:.1f} ID:{self.id}"
+            # Adiciona indicador se está aguardando semáforo
+            aguardando = "🔴" if self.aguardando_semaforo else ""
+            texto = f"V:{self.velocidade:.1f} ID:{self.id} {aguardando}"
             superficie_texto = fonte.render(texto, True, CONFIG.BRANCO)
             tela.blit(superficie_texto, (self.posicao[0] - 20, self.posicao[1] - 25))

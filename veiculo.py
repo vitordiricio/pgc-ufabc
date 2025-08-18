@@ -4,7 +4,7 @@ Sistema com vias de mão única: Horizontal (Leste→Oeste) e Vertical (Norte→
 """
 import random
 import math
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List
 import pygame
 from configuracao import CONFIG, Direcao, EstadoSemaforo
 from semaforo import Semaforo
@@ -60,9 +60,13 @@ class Veiculo:
         
         # Controle de semáforo - MELHORADO
         self.semaforo_proximo = None
-        self.ultimo_semaforo_processado = None  # Novo: rastreia qual semáforo já foi processado
+        self.ultimo_semaforo_processado = None
         self.distancia_semaforo = float('inf')
         self.pode_passar_amarelo = False
+        
+        # Controle de colisão
+        self.veiculo_frente = None
+        self.distancia_veiculo_frente = float('inf')
         
         # Métricas
         self.tempo_viagem = 0
@@ -107,12 +111,109 @@ class Veiculo:
             self.semaforo_proximo = None
             self.distancia_semaforo = float('inf')
     
-    def atualizar(self, dt: float = 1.0) -> None:
+    def verificar_colisao_futura(self, todos_veiculos: List['Veiculo']) -> bool:
+        """
+        Verifica se haverá colisão se o veículo continuar se movendo.
+        
+        Args:
+            todos_veiculos: Lista de todos os veículos na simulação
+            
+        Returns:
+            True se uma colisão é iminente
+        """
+        # Calcula posição futura
+        dx, dy = 0, 0
+        if self.direcao == Direcao.NORTE:
+            dy = self.velocidade + CONFIG.DISTANCIA_MIN_VEICULO / 2
+        elif self.direcao == Direcao.LESTE:
+            dx = self.velocidade + CONFIG.DISTANCIA_MIN_VEICULO / 2
+        
+        posicao_futura = [self.posicao[0] + dx, self.posicao[1] + dy]
+        
+        # Cria retângulo futuro
+        if self.direcao == Direcao.NORTE:
+            rect_futuro = pygame.Rect(
+                posicao_futura[0] - self.largura // 2,
+                posicao_futura[1] - self.altura // 2,
+                self.largura,
+                self.altura
+            )
+        else:
+            rect_futuro = pygame.Rect(
+                posicao_futura[0] - self.altura // 2,
+                posicao_futura[1] - self.largura // 2,
+                self.altura,
+                self.largura
+            )
+        
+        # Verifica colisão com outros veículos
+        for outro in todos_veiculos:
+            if outro.id == self.id or not outro.ativo:
+                continue
+            
+            # Só verifica veículos na mesma via
+            if not self._mesma_via(outro):
+                continue
+            
+            # Expande o retângulo do outro veículo para margem de segurança
+            rect_outro_expandido = outro.rect.inflate(10, 10)
+            
+            if rect_futuro.colliderect(rect_outro_expandido):
+                return True
+        
+        return False
+    
+    def processar_todos_veiculos(self, todos_veiculos: List['Veiculo']) -> None:
+        """
+        Processa interação com todos os veículos, não apenas os do cruzamento atual.
+        
+        Args:
+            todos_veiculos: Lista de todos os veículos na simulação
+        """
+        veiculo_mais_proximo = None
+        distancia_minima = float('inf')
+        
+        for outro in todos_veiculos:
+            if outro.id == self.id or not outro.ativo:
+                continue
+            
+            # Verifica se estão na mesma via e direção
+            if self.direcao != outro.direcao or not self._mesma_via(outro):
+                continue
+            
+            # Verifica se o outro está à frente
+            if self.direcao == Direcao.NORTE:
+                if outro.posicao[1] > self.posicao[1]:  # Outro está à frente (mais para baixo)
+                    distancia = outro.posicao[1] - self.posicao[1]
+                    if distancia < distancia_minima:
+                        distancia_minima = distancia
+                        veiculo_mais_proximo = outro
+            elif self.direcao == Direcao.LESTE:
+                if outro.posicao[0] > self.posicao[0]:  # Outro está à frente (mais para direita)
+                    distancia = outro.posicao[0] - self.posicao[0]
+                    if distancia < distancia_minima:
+                        distancia_minima = distancia
+                        veiculo_mais_proximo = outro
+        
+        # Processa o veículo mais próximo à frente
+        if veiculo_mais_proximo:
+            self.veiculo_frente = veiculo_mais_proximo
+            self.distancia_veiculo_frente = distancia_minima
+            self.processar_veiculo_frente(veiculo_mais_proximo)
+        else:
+            self.veiculo_frente = None
+            self.distancia_veiculo_frente = float('inf')
+            # Se não há veículo à frente e não está aguardando semáforo, acelera
+            if not self.aguardando_semaforo:
+                self.aceleracao_atual = CONFIG.ACELERACAO_VEICULO
+    
+    def atualizar(self, dt: float = 1.0, todos_veiculos: List['Veiculo'] = None) -> None:
         """
         Atualiza o estado do veículo.
         
         Args:
             dt: Delta time para cálculos de física
+            todos_veiculos: Lista de todos os veículos para verificação de colisão
         """
         # Atualiza métricas
         self.tempo_viagem += dt
@@ -125,9 +226,20 @@ class Veiculo:
             self.parado = False
         
         # Aplica aceleração
+        velocidade_anterior = self.velocidade
         self.velocidade += self.aceleracao_atual * dt
         self.velocidade = max(CONFIG.VELOCIDADE_MIN_VEICULO, 
                             min(CONFIG.VELOCIDADE_MAX_VEICULO, self.velocidade))
+        
+        # Verifica colisão antes de mover
+        if todos_veiculos and self.velocidade > 0:
+            if self.verificar_colisao_futura(todos_veiculos):
+                # Para imediatamente se detectar colisão iminente
+                self.velocidade = 0
+                self.aceleracao_atual = 0
+                # Não move o veículo
+                self._atualizar_rect()
+                return
         
         # Move o veículo - MÃO ÚNICA
         dx, dy = 0, 0
@@ -162,8 +274,9 @@ class Veiculo:
             posicao_parada: Posição onde o veículo deve parar
         """
         if not semaforo:
-            # Sem semáforo, acelera normalmente
-            self.aceleracao_atual = CONFIG.ACELERACAO_VEICULO
+            # Sem semáforo, acelera normalmente (se não houver veículo à frente)
+            if not self.veiculo_frente or self.distancia_veiculo_frente > CONFIG.DISTANCIA_REACAO:
+                self.aceleracao_atual = CONFIG.ACELERACAO_VEICULO
             return
 
         # Verifica se é um novo semáforo
@@ -174,7 +287,8 @@ class Veiculo:
 
         # Se já passou deste semáforo específico, ignora
         if self.passou_semaforo:
-            self.aceleracao_atual = CONFIG.ACELERACAO_VEICULO
+            if not self.veiculo_frente or self.distancia_veiculo_frente > CONFIG.DISTANCIA_REACAO:
+                self.aceleracao_atual = CONFIG.ACELERACAO_VEICULO
             return
 
         # Calcula distância até a linha de parada
@@ -184,18 +298,19 @@ class Veiculo:
         if self._passou_da_linha(posicao_parada):
             self.passou_semaforo = True
             self.aguardando_semaforo = False
-            self.aceleracao_atual = CONFIG.ACELERACAO_VEICULO
+            if not self.veiculo_frente or self.distancia_veiculo_frente > CONFIG.DISTANCIA_REACAO:
+                self.aceleracao_atual = CONFIG.ACELERACAO_VEICULO
             return
 
         # Lógica baseada no estado do semáforo
         if semaforo.estado == EstadoSemaforo.VERDE:
-            # Semáforo verde: acelera normalmente
+            # Semáforo verde: acelera normalmente (se não houver veículo à frente)
             self.aguardando_semaforo = False
-            self.aceleracao_atual = CONFIG.ACELERACAO_VEICULO
+            if not self.veiculo_frente or self.distancia_veiculo_frente > CONFIG.DISTANCIA_REACAO:
+                self.aceleracao_atual = CONFIG.ACELERACAO_VEICULO
 
         elif semaforo.estado == EstadoSemaforo.AMARELO:
             # Semáforo amarelo: decide se passa ou freia
-            # Só permite passar amarelo se já estava em movimento e próximo
             if self.pode_passar_amarelo:
                 # Já tinha decidido passar, mantém
                 self.aceleracao_atual = 0
@@ -218,7 +333,7 @@ class Veiculo:
         elif semaforo.estado == EstadoSemaforo.VERMELHO:
             # Semáforo vermelho: SEMPRE para
             self.aguardando_semaforo = True
-            self.pode_passar_amarelo = False  # Reset da permissão de passar amarelo
+            self.pode_passar_amarelo = False
             
             if self.distancia_semaforo <= CONFIG.DISTANCIA_PARADA_SEMAFORO:
                 # Muito próximo da linha, para imediatamente
@@ -240,22 +355,32 @@ class Veiculo:
         
         distancia = self._calcular_distancia_para_veiculo(veiculo_frente)
         
+        # Força parada se muito próximo
+        if distancia < CONFIG.DISTANCIA_MIN_VEICULO:
+            self.velocidade = 0
+            self.aceleracao_atual = 0
+            return
+        
         if distancia < CONFIG.DISTANCIA_REACAO:
             # Calcula velocidade segura baseada na distância
             velocidade_segura = self._calcular_velocidade_segura(distancia, veiculo_frente.velocidade)
             
             if self.velocidade > velocidade_segura:
                 # Precisa frear
-                if distancia < CONFIG.DISTANCIA_MIN_VEICULO:
+                if distancia < CONFIG.DISTANCIA_MIN_VEICULO * 1.5:
                     self.aceleracao_atual = -CONFIG.DESACELERACAO_EMERGENCIA
                 else:
                     self.aceleracao_atual = -CONFIG.DESACELERACAO_VEICULO
             elif self.velocidade < velocidade_segura * 0.9:
                 # Pode acelerar um pouco
-                self.aceleracao_atual = CONFIG.ACELERACAO_VEICULO * 0.5
+                self.aceleracao_atual = CONFIG.ACELERACAO_VEICULO * 0.3
             else:
                 # Manter velocidade
                 self.aceleracao_atual = 0
+        else:
+            # Distância segura, pode acelerar se não estiver aguardando semáforo
+            if not self.aguardando_semaforo:
+                self.aceleracao_atual = CONFIG.ACELERACAO_VEICULO
     
     def _calcular_distancia_ate_ponto(self, ponto: Tuple[float, float]) -> float:
         """Calcula a distância até um ponto específico - MÃO ÚNICA."""
@@ -295,10 +420,10 @@ class Veiculo:
         # Ajusta pela direção e dimensões dos veículos
         if self.direcao == Direcao.NORTE:
             if dy > 0:  # Outro está à frente
-                return dy - (self.altura + outro.altura) / 2
+                return max(0, dy - (self.altura + outro.altura) / 2)
         elif self.direcao == Direcao.LESTE:
             if dx > 0:  # Outro está à frente
-                return dx - (self.altura + outro.altura) / 2
+                return max(0, dx - (self.altura + outro.altura) / 2)
         
         return float('inf')
     
@@ -402,7 +527,6 @@ class Veiculo:
             pygame.draw.circle(superficie, cor_farol, (self.altura - 5, 8), 3)
             pygame.draw.circle(superficie, cor_farol, (self.altura - 5, self.largura - 8), 3)
         
-        # Não precisa rotacionar pois já criamos na orientação correta
         # Desenha na tela
         rect = superficie.get_rect(center=(int(self.posicao[0]), int(self.posicao[1])))
         tela.blit(superficie, rect)
@@ -410,8 +534,13 @@ class Veiculo:
         # Debug info
         if CONFIG.MOSTRAR_INFO_VEICULO:
             fonte = pygame.font.SysFont('Arial', 10)
-            # Adiciona indicador se está aguardando semáforo
-            aguardando = "🔴" if self.aguardando_semaforo else ""
+            # Adiciona indicador se está aguardando semáforo ou veículo
+            aguardando = ""
+            if self.aguardando_semaforo:
+                aguardando = "🔴"
+            elif self.veiculo_frente and self.distancia_veiculo_frente < CONFIG.DISTANCIA_REACAO:
+                aguardando = "🚗"
+            
             texto = f"V:{self.velocidade:.1f} ID:{self.id} {aguardando}"
             superficie_texto = fonte.render(texto, True, CONFIG.BRANCO)
             tela.blit(superficie_texto, (self.posicao[0] - 20, self.posicao[1] - 25))

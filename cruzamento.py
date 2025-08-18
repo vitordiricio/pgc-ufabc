@@ -176,12 +176,13 @@ class Cruzamento:
         return (linha, coluna)
     
     def atualizar_veiculos(self, todos_veiculos: List[Veiculo]) -> None:
-        """Atualiza o estado dos veículos no cruzamento."""
+        """Atualiza o estado dos veículos no cruzamento - CORRIGIDO."""
         # Limpa listas antigas
         for direcao in CONFIG.DIRECOES_PERMITIDAS:
             self.veiculos_por_direcao[direcao] = []
         
         # Reorganiza veículos por direção e proximidade
+        veiculos_proximos = []
         for veiculo in todos_veiculos:
             if veiculo.direcao in CONFIG.DIRECOES_PERMITIDAS and self._veiculo_proximo_ao_cruzamento(veiculo):
                 # Verifica se o veículo mudou de cruzamento
@@ -190,6 +191,7 @@ class Cruzamento:
                     # Reset do controle de semáforo se mudou de cruzamento
                     veiculo.resetar_controle_semaforo(self.id)
                     self.veiculos_por_direcao[veiculo.direcao].append(veiculo)
+                    veiculos_proximos.append(veiculo)
         
         # Processa cada direção permitida
         for direcao in CONFIG.DIRECOES_PERMITIDAS:
@@ -197,8 +199,8 @@ class Cruzamento:
             if not veiculos:
                 continue
             
-            # Ordena veículos por proximidade ao cruzamento
-            veiculos_ordenados = self._ordenar_veiculos_por_proximidade(veiculos, direcao)
+            # CORRIGIDO: Ordena veículos por posição absoluta na via
+            veiculos_ordenados = self._ordenar_veiculos_por_posicao(veiculos, direcao)
             
             # Obtém semáforo da direção
             semaforos = self.gerenciador_semaforos.semaforos.get(self.id, {})
@@ -206,11 +208,10 @@ class Cruzamento:
             
             # Processa cada veículo
             for i, veiculo in enumerate(veiculos_ordenados):
-                # Identifica veículo à frente
-                veiculo_frente = veiculos_ordenados[i-1] if i > 0 else None
+                # IMPORTANTE: Processa interação com TODOS os veículos, não apenas os do cruzamento
+                veiculo.processar_todos_veiculos(todos_veiculos)
                 
-                # Processa semáforo SEMPRE (independente do flag passou_semaforo)
-                # O controle interno do veículo vai decidir se deve processar ou não
+                # Processa semáforo se estiver antes da linha
                 if semaforo:
                     posicao_parada = semaforo.obter_posicao_parada()
                     
@@ -218,12 +219,8 @@ class Cruzamento:
                     if self._veiculo_antes_da_linha(veiculo, posicao_parada):
                         veiculo.processar_semaforo(semaforo, posicao_parada)
                 
-                # Processa veículo à frente
-                if veiculo_frente:
-                    veiculo.processar_veiculo_frente(veiculo_frente)
-                
-                # Atualiza posição
-                veiculo.atualizar()
+                # Atualiza posição com verificação de colisão
+                veiculo.atualizar(1.0, todos_veiculos)
                 
                 # Atualiza estatísticas
                 if veiculo.parado and veiculo.aguardando_semaforo:
@@ -266,14 +263,17 @@ class Cruzamento:
         
         return dx < distancia_limite or dy < distancia_limite
     
-    def _ordenar_veiculos_por_proximidade(self, veiculos: List[Veiculo], direcao: Direcao) -> List[Veiculo]:
-        """Ordena veículos por proximidade ao cruzamento."""
+    def _ordenar_veiculos_por_posicao(self, veiculos: List[Veiculo], direcao: Direcao) -> List[Veiculo]:
+        """
+        CORRIGIDO: Ordena veículos por posição absoluta na via.
+        O primeiro da lista é o que está mais à frente (mais perto do destino).
+        """
         if direcao == Direcao.NORTE:
-            # Quanto maior Y, mais próximo (vem de cima)
-            return sorted(veiculos, key=lambda v: -v.posicao[1])
+            # Norte→Sul: o mais à frente tem MAIOR Y (está mais para baixo)
+            return sorted(veiculos, key=lambda v: v.posicao[1], reverse=True)
         elif direcao == Direcao.LESTE:
-            # Quanto maior X, mais próximo (vem da esquerda)
-            return sorted(veiculos, key=lambda v: -v.posicao[0])
+            # Leste→Oeste: o mais à frente tem MAIOR X (está mais para direita)
+            return sorted(veiculos, key=lambda v: v.posicao[0], reverse=True)
         
         return veiculos
     
@@ -378,7 +378,7 @@ class MalhaViaria:
                 )
     
     def atualizar(self) -> None:
-        """Atualiza toda a malha viária."""
+        """Atualiza toda a malha viária - CORRIGIDO com detecção global."""
         self.metricas['tempo_simulacao'] += 1
         
         # Gera novos veículos
@@ -387,7 +387,10 @@ class MalhaViaria:
             self.veiculos.extend(novos_veiculos)
             self.metricas['veiculos_total'] += len(novos_veiculos)
         
-        # Atualiza veículos em cada cruzamento
+        # IMPORTANTE: Ordena TODOS os veículos globalmente por direção e posição
+        veiculos_por_via = self._organizar_veiculos_por_via()
+        
+        # Atualiza veículos em cada cruzamento, passando a lista completa
         for cruzamento in self.cruzamentos.values():
             cruzamento.atualizar_veiculos(self.veiculos)
         
@@ -411,6 +414,41 @@ class MalhaViaria:
                 self.metricas['tempo_parado_total'] += veiculo.tempo_parado
         
         self.veiculos = veiculos_ativos
+    
+    def _organizar_veiculos_por_via(self) -> Dict[Tuple[Direcao, int], List[Veiculo]]:
+        """
+        Organiza todos os veículos por via (direção e posição da via).
+        Retorna um dicionário onde a chave é (direção, índice_da_via).
+        """
+        veiculos_por_via = {}
+        
+        for veiculo in self.veiculos:
+            if veiculo.direcao == Direcao.NORTE:
+                # Via vertical - agrupa por X
+                via_x = round(veiculo.posicao[0] / CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS)
+                chave = (Direcao.NORTE, via_x)
+            elif veiculo.direcao == Direcao.LESTE:
+                # Via horizontal - agrupa por Y
+                via_y = round(veiculo.posicao[1] / CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS)
+                chave = (Direcao.LESTE, via_y)
+            else:
+                continue
+            
+            if chave not in veiculos_por_via:
+                veiculos_por_via[chave] = []
+            veiculos_por_via[chave].append(veiculo)
+        
+        # Ordena veículos em cada via por posição
+        for chave, veiculos in veiculos_por_via.items():
+            direcao = chave[0]
+            if direcao == Direcao.NORTE:
+                # Ordena por Y (maior Y = mais à frente)
+                veiculos.sort(key=lambda v: v.posicao[1], reverse=True)
+            elif direcao == Direcao.LESTE:
+                # Ordena por X (maior X = mais à frente)
+                veiculos.sort(key=lambda v: v.posicao[0], reverse=True)
+        
+        return veiculos_por_via
     
     def mudar_heuristica(self, nova_heuristica: TipoHeuristica) -> None:
         """Muda a heurística de controle de semáforos."""

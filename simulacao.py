@@ -6,7 +6,7 @@ import json
 import os
 from datetime import datetime
 from typing import Dict, List, Optional
-from configuracao import CONFIG, TipoHeuristica
+from configuracao import CONFIG, TipoHeuristica, Direcao, EstadoSemaforo
 from cruzamento import MalhaViaria
 from renderizador import Renderizador
 
@@ -154,12 +154,29 @@ class Simulacao:
         self.tempo_mensagem = 0
     
     def processar_eventos(self) -> None:
-        """Processa eventos de entrada do usuário."""
         for evento in pygame.event.get():
             if evento.type == pygame.QUIT:
                 self.rodando = False
             elif evento.type == pygame.KEYDOWN:
                 self._processar_tecla(evento)
+            elif evento.type == pygame.MOUSEBUTTONDOWN and evento.button == 1:
+                self._processar_clique(evento.pos)
+
+    def _processar_clique(self, pos) -> None:
+        """
+        Clique esquerdo alterna o semáforo sob o mouse quando em modo MANUAL.
+        Mostra mensagem do novo estado ou dica para ativar modo manual.
+        """
+        resultado = self.malha.gerenciador_semaforos.clique_em(pos)
+        if resultado:
+            (cid, direcao, estado) = resultado
+            nome_dir = "NORTE" if direcao == Direcao.NORTE else "LESTE"
+            nome_est = {EstadoSemaforo.VERDE:"VERDE", EstadoSemaforo.AMARELO:"AMARELO", EstadoSemaforo.VERMELHO:"VERMELHO"}[estado]
+            self._mostrar_mensagem(f"Cruz {cid} • {nome_dir}: {nome_est}")
+        else:
+            if self.heuristica_atual != TipoHeuristica.MANUAL:
+                self._mostrar_mensagem("Ative o modo Manual (tecla 5) para controlar por clique")
+
     
     def _processar_tecla(self, evento: pygame.event.Event) -> None:
         """Processa eventos de teclado."""

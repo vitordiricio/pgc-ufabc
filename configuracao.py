@@ -71,6 +71,17 @@ class Configuracao:
     # Configurações da rua - AGORA MÃO ÚNICA
     LARGURA_RUA: int = 40  # Reduzida pois só tem uma direção
     LARGURA_FAIXA: int = 40  # Uma única faixa por direção
+
+    # =======================
+    # Efeito "Caos" nas ruas
+    # =======================
+    CHAOS_ATIVO: bool = True
+    CHAOS_TAMANHO_SEGMENTO: int = 160    # px por trecho
+    CHAOS_FATOR_MIN: float = 0.6         # reduz limite local
+    CHAOS_FATOR_MAX: float = 1.2         # pode dar leve "boost"
+    CHAOS_PROB_MUTACAO: float = 0.002    # prob. (por segmento/frame) de mudar o fator
+    CHAOS_MOSTRAR: bool = False          # overlay visual dos trechos (debug)
+
     
     # Sistema de mão única: define quais direções são permitidas
     DIRECOES_PERMITIDAS: List[Direcao] = field(default_factory=lambda: [

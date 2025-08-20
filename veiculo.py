@@ -206,16 +206,18 @@ class Veiculo:
             # Se não há veículo à frente e não está aguardando semáforo, acelera
             if not self.aguardando_semaforo:
                 self.aceleracao_atual = CONFIG.ACELERACAO_VEICULO
-    
-    def atualizar(self, dt: float = 1.0, todos_veiculos: List['Veiculo'] = None) -> None:
+
+    # troque a assinatura atual por esta
+    def atualizar(self, dt: float = 1.0, todos_veiculos: List['Veiculo'] = None, malha=None) -> None:
         """
         Atualiza o estado do veículo.
-        
+
         Args:
             dt: Delta time para cálculos de física
             todos_veiculos: Lista de todos os veículos para verificação de colisão
+            malha: MalhaViaria para aplicar o fator de 'caos' (limite local de velocidade)
         """
-        # Atualiza métricas
+        # métricas (igual ao seu)
         self.tempo_viagem += dt
         if self.velocidade < 0.1:
             self.tempo_parado += dt
@@ -224,45 +226,42 @@ class Veiculo:
             self.parado = True
         else:
             self.parado = False
-        
-        # Aplica aceleração
-        velocidade_anterior = self.velocidade
+
+        # aplica aceleração
         self.velocidade += self.aceleracao_atual * dt
-        self.velocidade = max(CONFIG.VELOCIDADE_MIN_VEICULO, 
-                            min(CONFIG.VELOCIDADE_MAX_VEICULO, self.velocidade))
-        
-        # Verifica colisão antes de mover
+
+        # >>> limite de velocidade com fator local (CAOS)
+        fator = malha.obter_fator_caos(self) if malha is not None else 1.0
+        vmax_local = CONFIG.VELOCIDADE_MAX_VEICULO * fator
+        self.velocidade = max(CONFIG.VELOCIDADE_MIN_VEICULO, min(vmax_local, self.velocidade))
+
+        # colisão futura (igual ao seu)
         if todos_veiculos and self.velocidade > 0:
             if self.verificar_colisao_futura(todos_veiculos):
-                # Para imediatamente se detectar colisão iminente
                 self.velocidade = 0
                 self.aceleracao_atual = 0
-                # Não move o veículo
                 self._atualizar_rect()
                 return
-        
-        # Move o veículo - MÃO ÚNICA
+
+        # movimento (igual ao seu)
         dx, dy = 0, 0
         if self.direcao == Direcao.NORTE:
-            # Norte→Sul (de cima para baixo)
             dy = self.velocidade
         elif self.direcao == Direcao.LESTE:
-            # Leste→Oeste (da esquerda para direita)
             dx = self.velocidade
-        
+
         self.posicao[0] += dx
         self.posicao[1] += dy
-        self.distancia_percorrida += math.sqrt(dx**2 + dy**2)
-        
-        # Atualiza retângulo de colisão
+        self.distancia_percorrida += math.sqrt(dx ** 2 + dy ** 2)
+
         self._atualizar_rect()
-        
-        # Verifica se saiu da tela
+
+        # saída da tela (igual ao seu)
         margem = 100
-        if (self.posicao[0] < -margem or 
-            self.posicao[0] > CONFIG.LARGURA_TELA + margem or
-            self.posicao[1] < -margem or 
-            self.posicao[1] > CONFIG.ALTURA_TELA + margem):
+        if (self.posicao[0] < -margem or
+                self.posicao[0] > CONFIG.LARGURA_TELA + margem or
+                self.posicao[1] < -margem or
+                self.posicao[1] > CONFIG.ALTURA_TELA + margem):
             self.ativo = False
 
     def processar_semaforo(self, semaforo: Semaforo, posicao_parada: Tuple[float, float]) -> None:

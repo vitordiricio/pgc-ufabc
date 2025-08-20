@@ -41,6 +41,22 @@ class Semaforo:
         # Controle de mudança de estado
         self.mudanca_forcada = False
         self.proximo_estado = None
+
+        self._click_rect = None
+
+    def contem_ponto(self, pos: Tuple[int, int]) -> bool:
+        """Retorna True se o ponto do mouse está sobre este semáforo (usado no modo MANUAL)."""
+        return self._click_rect is not None and self._click_rect.collidepoint(pos)
+
+    def ciclo_manual(self) -> None:
+        """Cicla estados manualmente: Verde -> Amarelo -> Vermelho -> Verde."""
+        if self.estado == EstadoSemaforo.VERDE:
+            self._mudar_para_estado(EstadoSemaforo.AMARELO)
+        elif self.estado == EstadoSemaforo.AMARELO:
+            self._mudar_para_estado(EstadoSemaforo.VERMELHO)
+        else:  # VERMELHO
+            self._mudar_para_estado(EstadoSemaforo.VERDE)
+
     
     def atualizar(self, dt: float = 1.0) -> bool:
         """
@@ -117,6 +133,8 @@ class Semaforo:
         # Dimensões da caixa do semáforo
         largura = CONFIG.TAMANHO_SEMAFORO * 3 + CONFIG.ESPACAMENTO_SEMAFORO * 2
         altura = CONFIG.TAMANHO_SEMAFORO + 8
+
+
         
         # Posição da caixa - ajustada para mão única
         if self.direcao == Direcao.NORTE:
@@ -172,6 +190,7 @@ class Semaforo:
                 # Adiciona brilho se a luz estiver ativa
                 if self.estado == estado:
                     pygame.draw.circle(tela, cor, (x_centro, y), raio - 2, 2)
+        self._click_rect = rect_caixa.inflate(8, 8)
 
 
 class GerenciadorSemaforos:
@@ -195,7 +214,40 @@ class GerenciadorSemaforos:
         
         # Configurações específicas por heurística
         self.config_heuristica = self._inicializar_config_heuristica()
-    
+        self._click_rect = None  # retângulo usado para clique
+
+    def _semaforo_em_pos(self, pos: Tuple[int, int]) -> Optional[Semaforo]:
+        """Retorna o primeiro semáforo sob o ponto do mouse (ou None)."""
+        for sems in self.semaforos.values():
+            for sem in sems.values():
+                if sem.contem_ponto(pos):
+                    return sem
+        return None
+
+    def clique_em(self, pos: Tuple[int, int]) -> Optional[Tuple[Tuple[int,int], Direcao, EstadoSemaforo]]:
+        """
+        Trata clique do usuário. Só age em modo MANUAL para não ser sobreescrito pela heurística.
+        Retorna (id_cruzamento, direcao, novo_estado) em caso de sucesso.
+        """
+        if self.heuristica != TipoHeuristica.MANUAL:
+            return None
+
+        sem = self._semaforo_em_pos(pos)
+        if not sem:
+            return None
+
+        # Cicla estado do semáforo clicado
+        sem.ciclo_manual()
+
+        # Se ficou VERDE, garanta que o outro da mesma interseção fique VERMELHO (evita verdes conflitantes)
+        outro_dir = Direcao.LESTE if sem.direcao == Direcao.NORTE else Direcao.NORTE
+        sems_cruz = self.semaforos.get(sem.id_cruzamento, {})
+        outro = sems_cruz.get(outro_dir)
+        if outro and sem.estado == EstadoSemaforo.VERDE:
+            outro._mudar_para_estado(EstadoSemaforo.VERMELHO)
+
+        return (sem.id_cruzamento, sem.direcao, sem.estado)
+
     def _inicializar_config_heuristica(self) -> Dict:
         """Inicializa configurações específicas para cada heurística."""
         if self.heuristica == TipoHeuristica.WAVE_GREEN:

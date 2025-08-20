@@ -225,9 +225,11 @@ class Renderizador:
             ("+/-", "Ajustar velocidade"),
             ("1-4", "Mudar heurística automática"),
             ("5",   "Modo Manual"),
-            ("N",   "Avançar fase manual"),
+            ("N",   "Avançar fase manual (todos)"),
+            ("Clique", "Alternar semáforo sob o mouse (Manual)"),  # <-- adicionado
             ("TAB", "Alternar estatísticas")
         ]
+
         
         for tecla, descricao in controles:
             # Tecla

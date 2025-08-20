@@ -1,6 +1,11 @@
 """
 Módulo de cruzamento para a simulação de tráfego com múltiplos cruzamentos.
 Sistema com vias de mão única: Horizontal (Leste→Oeste) e Vertical (Norte→Sul)
+
+EXTENSÕES:
+- Duas faixas por via (mão única), com spawn em qualquer faixa
+- Troca de faixa é tratada no Veiculo; aqui garantimos spawn alinhado
+- Conversão (virar 90°) no cruzamento: NORTE↔LESTE, com realinhamento de faixa
 """
 import random
 import math
@@ -34,7 +39,7 @@ class Cruzamento:
         self.posicao = posicao
         self.centro_x, self.centro_y = posicao
         self.gerenciador_semaforos = gerenciador_semaforos
-        self.malha = malha_viaria  # <<< referência à malha
+        self.malha = malha_viaria  # referência à malha
 
         # Veículos no cruzamento - APENAS DIREÇÕES PERMITIDAS
         self.veiculos_por_direcao: Dict[Direcao, List[Veiculo]] = {
@@ -56,6 +61,7 @@ class Cruzamento:
             'densidade_atual': 0
         }
 
+    # ---------------------- helpers de geometria/faixa ----------------------
     def _calcular_limites(self) -> Dict[str, float]:
         """Calcula os limites físicos do cruzamento."""
         margem = self.largura_rua // 2
@@ -66,6 +72,16 @@ class Cruzamento:
             'base': self.centro_y + margem
         }
 
+    def _offset_lateral(self, faixa_idx: int) -> float:
+        """Centro da faixa i dentro da rua (duas faixas por sentido)."""
+        return -CONFIG.LARGURA_RUA / 2 + (faixa_idx + 0.5) * CONFIG.LARGURA_FAIXA
+
+    def _esta_no_miolo(self, veiculo: Veiculo) -> bool:
+        """Retorna True se o veículo está no 'miolo' do cruzamento (janela da curva)."""
+        return (abs(veiculo.posicao[0] - self.centro_x) <= CONFIG.RAIO_JANELA_CURVA and
+                abs(veiculo.posicao[1] - self.centro_y) <= CONFIG.RAIO_JANELA_CURVA)
+
+    # ---------------------------- semáforos ----------------------------
     def _configurar_semaforos(self) -> None:
         """Configura os semáforos do cruzamento - apenas para direções permitidas."""
         offset = self.largura_rua // 2 + 30
@@ -89,6 +105,7 @@ class Cruzamento:
         for semaforo in semaforos.values():
             self.gerenciador_semaforos.adicionar_semaforo(semaforo)
 
+    # --------------------------- spawn veículos ---------------------------
     def pode_gerar_veiculo(self, direcao: Direcao) -> bool:
         """Verifica se pode gerar veículo em uma direção específica - MÃO ÚNICA."""
         # Só permite direções de mão única
@@ -110,41 +127,27 @@ class Cruzamento:
 
         return pode_gerar.get(direcao, False)
 
-    def gerar_veiculos(self) -> List[Veiculo]:
-        """Gera novos veículos nas bordas apropriadas - APENAS MÃO ÚNICA."""
-        novos_veiculos = []
-
-        # Apenas tenta gerar nas direções permitidas
-        for direcao in CONFIG.DIRECOES_PERMITIDAS:
-            if not self.pode_gerar_veiculo(direcao):
-                continue
-
-            if random.random() < CONFIG.TAXA_GERACAO_VEICULO:
-                posicao = self._calcular_posicao_inicial(direcao)
-
-                # Verifica se há espaço
-                if self._tem_espaco_para_gerar(direcao, posicao):
-                    veiculo = Veiculo(direcao, posicao, self.id)
-                    novos_veiculos.append(veiculo)
-                    self.veiculos_por_direcao[direcao].append(veiculo)
-
-        return novos_veiculos
-
-    def _calcular_posicao_inicial(self, direcao: Direcao) -> Tuple[float, float]:
-        """Calcula a posição inicial para um veículo - MÃO ÚNICA, sem escolha de faixa."""
+    def _calcular_posicao_inicial(self, direcao: Direcao, faixa: int) -> Tuple[float, float]:
+        """Calcula a posição inicial para um veículo alinhado à FAIXA escolhida."""
         if direcao == Direcao.NORTE:
-            # Spawn no topo, vai para baixo
-            return (self.centro_x, -50)
+            # Spawn no topo, indo para baixo — alinhar X pela faixa
+            x = self.centro_x + self._offset_lateral(faixa)
+            return (x, -50)
         elif direcao == Direcao.LESTE:
-            # Spawn na esquerda, vai para direita
-            return (-50, self.centro_y)
+            # Spawn na esquerda, indo para direita — alinhar Y pela faixa
+            y = self.centro_y + self._offset_lateral(faixa)
+            return (-50, y)
         else:
             # Não deveria chegar aqui com mão única
             return (0, 0)
 
-    def _tem_espaco_para_gerar(self, direcao: Direcao, posicao: Tuple[float, float]) -> bool:
-        """Verifica se há espaço suficiente para gerar um novo veículo."""
+    def _tem_espaco_para_gerar(self, direcao: Direcao, posicao: Tuple[float, float], faixa: int) -> bool:
+        """Verifica se há espaço suficiente para gerar um novo veículo na faixa específica."""
         for veiculo in self.veiculos_por_direcao.get(direcao, []):
+            # Só checa veículos na MESMA faixa
+            if getattr(veiculo, "faixa", 0) != faixa:
+                continue
+
             dx = abs(veiculo.posicao[0] - posicao[0])
             dy = abs(veiculo.posicao[1] - posicao[1])
 
@@ -157,6 +160,31 @@ class Cruzamento:
 
         return True
 
+    def gerar_veiculos(self) -> List[Veiculo]:
+        """Gera novos veículos nas bordas apropriadas - agora escolhendo FAIXA aleatoriamente."""
+        novos_veiculos = []
+
+        # Apenas tenta gerar nas direções permitidas
+        for direcao in CONFIG.DIRECOES_PERMITIDAS:
+            if not self.pode_gerar_veiculo(direcao):
+                continue
+
+            if random.random() < CONFIG.TAXA_GERACAO_VEICULO:
+                faixa = random.randrange(CONFIG.NUM_FAIXAS_POR_SENTIDO)
+                posicao = self._calcular_posicao_inicial(direcao, faixa)
+
+                # Verifica se há espaço na faixa
+                if self._tem_espaco_para_gerar(direcao, posicao, faixa):
+                    veiculo = Veiculo(direcao, posicao, self.id, faixa=faixa)
+                    # Ancorar eixos base para o corredor inicial
+                    veiculo.resetar_controle_semaforo(self.id)
+
+                    novos_veiculos.append(veiculo)
+                    self.veiculos_por_direcao[direcao].append(veiculo)
+
+        return novos_veiculos
+
+    # ---------------------------- suporte/ordenação ----------------------------
     def _determinar_cruzamento_veiculo(self, veiculo: Veiculo) -> Tuple[int, int]:
         """
         Determina qual cruzamento o veículo está mais próximo.
@@ -179,8 +207,38 @@ class Cruzamento:
 
         return (linha, coluna)
 
+    def _veiculo_proximo_ao_cruzamento(self, veiculo: Veiculo) -> bool:
+        """Verifica se um veículo está próximo o suficiente do cruzamento."""
+        distancia_limite = CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS * 0.7
+
+        dx = abs(veiculo.posicao[0] - self.centro_x)
+        dy = abs(veiculo.posicao[1] - self.centro_y)
+
+        return dx < distancia_limite or dy < distancia_limite
+
+    def _ordenar_veiculos_por_posicao(self, veiculos: List[Veiculo], direcao: Direcao) -> List[Veiculo]:
+        """
+        Ordena veículos por posição absoluta na via.
+        O primeiro da lista é o que está mais à frente (mais perto do destino).
+        """
+        if direcao == Direcao.NORTE:
+            # Norte→Sul: o mais à frente tem MAIOR Y (está mais para baixo)
+            return sorted(veiculos, key=lambda v: v.posicao[1], reverse=True)
+        elif direcao == Direcao.LESTE:
+            # Leste→Oeste: o mais à frente tem MAIOR X (está mais para direita)
+            return sorted(veiculos, key=lambda v: v.posicao[0], reverse=True)
+        return veiculos
+
+    def obter_densidade_por_direcao(self) -> Dict[Direcao, int]:
+        """Retorna a densidade de veículos por direção."""
+        return {
+            direcao: len(self.veiculos_por_direcao.get(direcao, []))
+            for direcao in CONFIG.DIRECOES_PERMITIDAS
+        }
+
+    # ---------------------------- ciclo de atualização ----------------------------
     def atualizar_veiculos(self, todos_veiculos: List[Veiculo]) -> None:
-        """Atualiza o estado dos veículos no cruzamento - CORRIGIDO."""
+        """Atualiza o estado dos veículos no cruzamento, incluindo lógica de conversão."""
         # Limpa listas antigas
         for direcao in CONFIG.DIRECOES_PERMITIDAS:
             self.veiculos_por_direcao[direcao] = []
@@ -189,10 +247,10 @@ class Cruzamento:
         veiculos_proximos = []
         for veiculo in todos_veiculos:
             if veiculo.direcao in CONFIG.DIRECOES_PERMITIDAS and self._veiculo_proximo_ao_cruzamento(veiculo):
-                # Verifica se o veículo mudou de cruzamento
+                # Verifica se o veículo está nesse cruzamento
                 cruzamento_atual = self._determinar_cruzamento_veiculo(veiculo)
                 if cruzamento_atual == self.id:
-                    # Reset do controle de semáforo se mudou de cruzamento
+                    # Atualiza eixos base para o corredor atual (ancoragem de faixa)
                     veiculo.resetar_controle_semaforo(self.id)
                     self.veiculos_por_direcao[veiculo.direcao].append(veiculo)
                     veiculos_proximos.append(veiculo)
@@ -203,7 +261,7 @@ class Cruzamento:
             if not veiculos:
                 continue
 
-            # CORRIGIDO: Ordena veículos por posição absoluta na via
+            # Ordena por posição na via
             veiculos_ordenados = self._ordenar_veiculos_por_posicao(veiculos, direcao)
 
             # Obtém semáforo da direção
@@ -212,7 +270,7 @@ class Cruzamento:
 
             # Processa cada veículo
             for i, veiculo in enumerate(veiculos_ordenados):
-                # IMPORTANTE: Processa interação com TODOS os veículos, não apenas os do cruzamento
+                # Interação com todos os veículos (car-following/faixa)
                 veiculo.processar_todos_veiculos(todos_veiculos)
 
                 # Processa semáforo se estiver antes da linha
@@ -224,8 +282,33 @@ class Cruzamento:
                         veiculo.processar_semaforo(semaforo, posicao_parada)
 
                 # Atualiza posição com verificação de colisão
-                # >>> agora passamos a malha para aplicar o "caos" local de velocidade
                 veiculo.atualizar(1.0, todos_veiculos, self.malha)
+
+                # === Virar no cruzamento (90°) ===
+                # Regras:
+                # - veículo decidiu virar (vai_virar)
+                # - ainda não virou (ja_virou == False)
+                # - já passou da linha de parada do semáforo (passou_semaforo)
+                # - está dentro do "miolo" do cruzamento (janela de curva)
+                if (veiculo.vai_virar and not veiculo.ja_virou and veiculo.passou_semaforo and self._esta_no_miolo(veiculo)):
+                    # define faixa de destino arbitrária (pode virar apenas a partir de qualquer faixa)
+                    nova_faixa = random.randrange(CONFIG.NUM_FAIXAS_POR_SENTIDO)
+                    if veiculo.direcao == Direcao.NORTE:
+                        # NORTE -> LESTE
+                        veiculo.direcao = Direcao.LESTE
+                        veiculo.resetar_controle_semaforo(self.id)   # atualiza base_y para o corredor horizontal
+                        veiculo.definir_faixa(nova_faixa)
+                        # "encaixe" no eixo X do cruzamento, depois ancora Y pela faixa
+                        veiculo.posicao[0] = self.centro_x
+                        veiculo._ancorar_na_faixa()
+                    elif veiculo.direcao == Direcao.LESTE:
+                        # LESTE -> NORTE
+                        veiculo.direcao = Direcao.NORTE
+                        veiculo.resetar_controle_semaforo(self.id)   # atualiza base_x para o corredor vertical
+                        veiculo.definir_faixa(nova_faixa)
+                        veiculo.posicao[1] = self.centro_y
+                        veiculo._ancorar_na_faixa()
+                    veiculo.ja_virou = True
 
                 # Atualiza estatísticas
                 if veiculo.parado and veiculo.aguardando_semaforo:
@@ -259,36 +342,7 @@ class Cruzamento:
 
         return False
 
-    def _veiculo_proximo_ao_cruzamento(self, veiculo: Veiculo) -> bool:
-        """Verifica se um veículo está próximo o suficiente do cruzamento."""
-        distancia_limite = CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS * 0.7
-
-        dx = abs(veiculo.posicao[0] - self.centro_x)
-        dy = abs(veiculo.posicao[1] - self.centro_y)
-
-        return dx < distancia_limite or dy < distancia_limite
-
-    def _ordenar_veiculos_por_posicao(self, veiculos: List[Veiculo], direcao: Direcao) -> List[Veiculo]:
-        """
-        CORRIGIDO: Ordena veículos por posição absoluta na via.
-        O primeiro da lista é o que está mais à frente (mais perto do destino).
-        """
-        if direcao == Direcao.NORTE:
-            # Norte→Sul: o mais à frente tem MAIOR Y (está mais para baixo)
-            return sorted(veiculos, key=lambda v: v.posicao[1], reverse=True)
-        elif direcao == Direcao.LESTE:
-            # Leste→Oeste: o mais à frente tem MAIOR X (está mais para direita)
-            return sorted(veiculos, key=lambda v: v.posicao[0], reverse=True)
-
-        return veiculos
-
-    def obter_densidade_por_direcao(self) -> Dict[Direcao, int]:
-        """Retorna a densidade de veículos por direção."""
-        return {
-            direcao: len(self.veiculos_por_direcao.get(direcao, []))
-            for direcao in CONFIG.DIRECOES_PERMITIDAS
-        }
-
+    # ---------------------------- desenho ----------------------------
     def desenhar(self, tela: pygame.Surface) -> None:
         """Desenha o cruzamento e seus elementos."""
         # Desenha área do cruzamento
@@ -359,7 +413,7 @@ class MalhaViaria:
         self.gerenciador_semaforos = GerenciadorSemaforos(CONFIG.HEURISTICA_ATIVA)
 
         # Efeito "caos" por via/trecho
-        self._inicializar_caos()  # <<< inicializa mapas de caos
+        self._inicializar_caos()  # inicializa mapas de caos
 
         # Criar cruzamentos
         self._criar_cruzamentos()
@@ -448,11 +502,11 @@ class MalhaViaria:
 
                 id_cruzamento = (linha, coluna)
                 self.cruzamentos[id_cruzamento] = Cruzamento(
-                    (x, y), id_cruzamento, self.gerenciador_semaforos, self  # <<< passa self (malha)
+                    (x, y), id_cruzamento, self.gerenciador_semaforos, self  # passa self (malha)
                 )
 
     def atualizar(self) -> None:
-        """Atualiza toda a malha viária - CORRIGIDO com detecção global."""
+        """Atualiza toda a malha viária - com detecção global e caos."""
         self.metricas['tempo_simulacao'] += 1
 
         # Atualiza "caos" das vias
@@ -463,9 +517,6 @@ class MalhaViaria:
             novos_veiculos = cruzamento.gerar_veiculos()
             self.veiculos.extend(novos_veiculos)
             self.metricas['veiculos_total'] += len(novos_veiculos)
-
-        # IMPORTANTE: Ordena TODOS os veículos globalmente por direção e posição
-        veiculos_por_via = self._organizar_veiculos_por_via()
 
         # Atualiza veículos em cada cruzamento, passando a lista completa
         for cruzamento in self.cruzamentos.values():
@@ -491,41 +542,6 @@ class MalhaViaria:
                 self.metricas['tempo_parado_total'] += veiculo.tempo_parado
 
         self.veiculos = veiculos_ativos
-
-    def _organizar_veiculos_por_via(self) -> Dict[Tuple[Direcao, int], List[Veiculo]]:
-        """
-        Organiza todos os veículos por via (direção e posição da via).
-        Retorna um dicionário onde a chave é (direção, índice_da_via).
-        """
-        veiculos_por_via = {}
-
-        for veiculo in self.veiculos:
-            if veiculo.direcao == Direcao.NORTE:
-                # Via vertical - agrupa por X
-                via_x = round(veiculo.posicao[0] / CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS)
-                chave = (Direcao.NORTE, via_x)
-            elif veiculo.direcao == Direcao.LESTE:
-                # Via horizontal - agrupa por Y
-                via_y = round(veiculo.posicao[1] / CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS)
-                chave = (Direcao.LESTE, via_y)
-            else:
-                continue
-
-            if chave not in veiculos_por_via:
-                veiculos_por_via[chave] = []
-            veiculos_por_via[chave].append(veiculo)
-
-        # Ordena veículos em cada via por posição
-        for chave, veiculos in veiculos_por_via.items():
-            direcao = chave[0]
-            if direcao == Direcao.NORTE:
-                # Ordena por Y (maior Y = mais à frente)
-                veiculos.sort(key=lambda v: v.posicao[1], reverse=True)
-            elif direcao == Direcao.LESTE:
-                # Ordena por X (maior X = mais à frente)
-                veiculos.sort(key=lambda v: v.posicao[0], reverse=True)
-
-        return veiculos_por_via
 
     def mudar_heuristica(self, nova_heuristica: TipoHeuristica) -> None:
         """Muda a heurística de controle de semáforos."""
@@ -553,6 +569,7 @@ class MalhaViaria:
             'tempo_simulacao': self.metricas['tempo_simulacao'] / CONFIG.FPS
         }
 
+    # ---------------------------- desenho da malha ----------------------------
     def desenhar(self, tela: pygame.Surface) -> None:
         """Desenha toda a malha viária."""
         # Desenha as ruas

@@ -60,7 +60,7 @@ class Configuracao:
     CINZA_CLARO: tuple[int, int, int] = (200, 200, 200)
     VERDE_ESCURO: tuple[int, int, int] = (0, 100, 0)
 
-    # Cores veículos (fallback / aleatórias para tipos não mapeados)
+    # Cores veículos (fallback)
     CORES_VEICULO: List[tuple[int, int, int]] = field(default_factory=lambda: [
         (220, 50, 50), (50, 100, 200), (50, 180, 50), (255, 140, 0),
         (148, 0, 211), (255, 215, 0), (0, 191, 255), (255, 20, 147)
@@ -69,9 +69,9 @@ class Configuracao:
     # ----------------------------
     # Larguras / faixas da via
     # ----------------------------
-    NUM_FAIXAS: int = 2                  # nº de faixas por via (mesmo valor p/ N e L)
-    LARGURA_FAIXA: int = 26              # px de cada faixa (>= largura do veículo)
-    LARGURA_RUA: int = 40                # será recalculado no __post_init__
+    NUM_FAIXAS: int = 2
+    LARGURA_FAIXA: int = 26
+    LARGURA_RUA: int = 40
 
     # =======================
     # Efeito "Caos" nas ruas
@@ -109,7 +109,7 @@ class Configuracao:
     DISTANCIA_REACAO: int = 80
 
     # ---------
-    # VIRADAS (Item 1)
+    # VIRADAS
     # ---------
     HABILITAR_VIRADAS: bool = True
     PROB_VIRAR_NORTE_PARA_LESTE: float = 0.25
@@ -120,7 +120,7 @@ class Configuracao:
     MOSTRAR_TRAJETORIA_VIRADA: bool = False
 
     # ---------
-    # TROCA DE FAIXA (Item 2)
+    # TROCA DE FAIXA
     # ---------
     TROCA_FAIXA_ATIVA: bool = True
     PROB_TENTAR_TROCAR: float = 0.03
@@ -165,12 +165,10 @@ class Configuracao:
     # Posição
     MARGEM_TELA: int = 100
 
-    # =============== TIPOS DE VEÍCULO (Item 3) ===============
+    # =============== TIPOS DE VEÍCULO ===============
     TIPOS_ATIVOS: List[TipoVeiculo] = field(default_factory=lambda: [
         TipoVeiculo.CARRO, TipoVeiculo.MOTO, TipoVeiculo.ONIBUS, TipoVeiculo.CAMINHAO
     ])
-
-    # Distribuição de spawn (soma ≈ 1.0)
     DISTRIBUICAO_TIPOS: Dict[TipoVeiculo, float] = field(
         default_factory=lambda: {
             TipoVeiculo.CARRO: 0.60,
@@ -179,11 +177,6 @@ class Configuracao:
             TipoVeiculo.CAMINHAO: 0.15,
         }
     )
-
-    # Parâmetros físicos/operacionais por tipo
-    # Notas:
-    # - 'largura' deve caber em LARGURA_FAIXA (26px)
-    # - 'comprimento' é o eixo longitudinal
     PARAMS_TIPO_VEICULO: Dict[TipoVeiculo, Dict[str, float]] = field(
         default_factory=lambda: {
             TipoVeiculo.CARRO: {
@@ -212,19 +205,26 @@ class Configuracao:
             },
         }
     )
-
-    # Cores por tipo (opcional, para visual rápido do mix)
     CORES_TIPO: Dict[TipoVeiculo, Tuple[int, int, int]] = field(
         default_factory=lambda: {
-            TipoVeiculo.CARRO: (50, 100, 200),      # azul
-            TipoVeiculo.MOTO: (255, 215, 0),        # dourado
-            TipoVeiculo.ONIBUS: (220, 50, 50),      # vermelho
-            TipoVeiculo.CAMINHAO: (50, 180, 50),    # verde
+            TipoVeiculo.CARRO: (50, 100, 200),
+            TipoVeiculo.MOTO: (255, 215, 0),
+            TipoVeiculo.ONIBUS: (220, 50, 50),
+            TipoVeiculo.CAMINHAO: (50, 180, 50),
         }
     )
 
+    # =============== INCIDENTES (bloqueios/lentidão) ===============
+    INCIDENTES_ATIVOS: bool = True
+    INCIDENTO_DURACAO_PADRAO_S: int = 15          # bloqueio
+    INCIDENTO_FATOR_BLOQUEIO: float = 0.0
+    INCIDENTO_DURACAO_LENTIDAO_S: int = 20        # lentidão
+    INCIDENTO_FATOR_LENTIDAO: float = 0.4
+    # Cores RGBA para overlay
+    INCIDENTE_COR_BLOQUEIO: Tuple[int, int, int, int] = (200, 60, 60, 160)
+    INCIDENTE_COR_LENTIDAO: Tuple[int, int, int, int] = (255, 200, 0, 140)
+
     def __post_init__(self):
-        # Ajusta a largura total da via para caber as faixas
         self.LARGURA_RUA = max(self.LARGURA_RUA, self.NUM_FAIXAS * self.LARGURA_FAIXA)
 
     @property
@@ -238,5 +238,4 @@ class Configuracao:
         return (self.ALTURA_TELA - altura_total) // 2 + 50
 
 
-# Instância singleton
 CONFIG = Configuracao()

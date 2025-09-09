@@ -1,6 +1,7 @@
 import random
 import math
-from typing import List, Dict, Tuple
+from dataclasses import dataclass
+from typing import List, Dict, Tuple, Optional
 import pygame
 from configuracao import CONFIG, Direcao, TipoHeuristica, TipoVeiculo
 from veiculo import Veiculo
@@ -10,6 +11,16 @@ from semaforo import Semaforo, GerenciadorSemaforos
 def _offset_faixa(idx: int) -> float:
     """Offset do centro da faixa em relação ao centro da via."""
     return (idx - (CONFIG.NUM_FAIXAS - 1) / 2.0) * CONFIG.LARGURA_FAIXA
+
+
+# ----------------- INCIDENTE -----------------
+@dataclass
+class Incidente:
+    direcao: Direcao        # NORTE (vertical) ou LESTE (horizontal)
+    indice: int             # linha (p/ LESTE) ou coluna (p/ NORTE)
+    seg_idx: int            # índice do segmento (grade do caos)
+    fator: float            # 0.0 = bloqueio total, 0< f <1 = lentidão
+    restante_frames: int    # tempo restante (frames)
 
 
 class Cruzamento:
@@ -90,11 +101,10 @@ class Cruzamento:
             return (x, y)
         return (0, 0)
 
-    # ---------- TIPOS: sorteio ponderado ----------
     def _sortear_tipo_veiculo(self) -> TipoVeiculo:
+        """Sorteia um tipo de veículo conforme a distribuição da configuração."""
         tipos = [t for t in CONFIG.TIPOS_ATIVOS]
         pesos = [CONFIG.DISTRIBUICAO_TIPOS.get(t, 0.0) for t in tipos]
-        # fallback se pesos não somarem nada
         if sum(pesos) <= 0:
             return TipoVeiculo.CARRO
         return random.choices(tipos, weights=pesos, k=1)[0]
@@ -107,18 +117,16 @@ class Cruzamento:
             if random.random() < CONFIG.TAXA_GERACAO_VEICULO:
                 faixa_id = random.randrange(CONFIG.NUM_FAIXAS)
                 posicao = self._posicao_spawn_por_faixa(direcao, faixa_id)
-
-                # Escolhe tipo e testa espaço com parâmetros do tipo
                 tipo = self._sortear_tipo_veiculo()
                 if self._tem_espaco_para_gerar(direcao, posicao, tipo):
-                    veiculo = Veiculo(direcao, posicao, self.id, tipo=tipo)
+                    veiculo = Veiculo(direcao, posicao, self.id, tipo=tipo)  # requer Veiculo aceitar "tipo"
                     veiculo.faixa_id = faixa_id
                     novos_veiculos.append(veiculo)
                     self.veiculos_por_direcao[direcao].append(veiculo)
         return novos_veiculos
 
     def _tem_espaco_para_gerar(self, direcao: Direcao, posicao: Tuple[float, float], tipo: TipoVeiculo) -> bool:
-        """Garante espaçamento mínimo no spawn considerando o TIPO do veículo."""
+        """Respeita distância mínima do tipo ao gerar em uma faixa."""
         dist_min_tipo = CONFIG.PARAMS_TIPO_VEICULO.get(tipo, {}).get('dist_min', CONFIG.DISTANCIA_MIN_VEICULO)
         for veiculo in self.veiculos_por_direcao.get(direcao, []):
             dx = abs(veiculo.posicao[0] - posicao[0])
@@ -141,6 +149,7 @@ class Cruzamento:
         return (linha, coluna)
 
     def atualizar_veiculos(self, todos_veiculos: List[Veiculo]) -> None:
+        # Reassocia veículos próximos a este cruzamento
         for direcao in CONFIG.DIRECOES_PERMITIDAS:
             self.veiculos_por_direcao[direcao] = []
 
@@ -151,6 +160,7 @@ class Cruzamento:
                     veiculo.resetar_controle_semaforo(self.id)
                     self.veiculos_por_direcao[veiculo.direcao].append(veiculo)
 
+        # Atualiza cada veículo na ordem da via
         for direcao in CONFIG.DIRECOES_PERMITIDAS:
             veiculos = self.veiculos_por_direcao.get(direcao, [])
             if not veiculos:
@@ -248,7 +258,7 @@ class Cruzamento:
 
 
 class MalhaViaria:
-    """Gerencia toda a malha viária com múltiplos cruzamentos e vias de mão única."""
+    """Gerencia toda a malha viária com múltiplos cruzamentos, caos e incidentes."""
 
     def __init__(self, linhas: int = CONFIG.LINHAS_GRADE, colunas: int = CONFIG.COLUNAS_GRADE):
         self.linhas = linhas
@@ -257,7 +267,11 @@ class MalhaViaria:
         self.cruzamentos: Dict[Tuple[int, int], Cruzamento] = {}
         self.gerenciador_semaforos = GerenciadorSemaforos(CONFIG.HEURISTICA_ATIVA)
 
+        # Caos
         self._inicializar_caos()
+        # Incidentes
+        self.incidentes: List[Incidente] = []
+
         self._criar_cruzamentos()
 
         self.metricas = {
@@ -296,63 +310,167 @@ class MalhaViaria:
                 if random.random() < p:
                     v[i] = random.uniform(fmin, fmax)
 
-    def obter_fator_caos(self, veiculo: Veiculo) -> float:
-        if not CONFIG.CHAOS_ATIVO:
+    # ---- INCIDENTES ----
+    def _linha_mais_proxima(self, y: float) -> int:
+        idx = round((y - CONFIG.POSICAO_INICIAL_Y) / CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS)
+        return max(0, min(self.linhas - 1, idx))
+
+    def _coluna_mais_proxima(self, x: float) -> int:
+        idx = round((x - CONFIG.POSICAO_INICIAL_X) / CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS)
+        return max(0, min(self.colunas - 1, idx))
+
+    def _seg_idx_x(self, x: float) -> int:
+        return max(0, min(self._caos_seg_h - 1, int(x // CONFIG.CHAOS_TAMANHO_SEGMENTO)))
+
+    def _seg_idx_y(self, y: float) -> int:
+        return max(0, min(self._caos_seg_v - 1, int(y // CONFIG.CHAOS_TAMANHO_SEGMENTO)))
+
+    def _localizar_segmento_por_pos(self, pos: Tuple[int, int]) -> Optional[Tuple[Direcao, int, int]]:
+        """Retorna (direcao, indice, seg_idx) do segmento mais próximo da via, ou None se fora da via."""
+        x, y = pos
+        # distância até eixos
+        linha = self._linha_mais_proxima(y)
+        y_centro = CONFIG.POSICAO_INICIAL_Y + linha * CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS
+        dist_h = abs(y - y_centro)
+
+        coluna = self._coluna_mais_proxima(x)
+        x_centro = CONFIG.POSICAO_INICIAL_X + coluna * CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS
+        dist_v = abs(x - x_centro)
+
+        limite = CONFIG.LARGURA_RUA / 2 + 6  # margem
+        candidato: Optional[Tuple[Direcao, int, int]] = None
+
+        if dist_h <= limite and (dist_h <= dist_v or dist_v > limite):
+            # via horizontal (LESTE)
+            seg = self._seg_idx_x(x)
+            candidato = (Direcao.LESTE, linha, seg)
+        elif dist_v <= limite:
+            # via vertical (NORTE)
+            seg = self._seg_idx_y(y)
+            candidato = (Direcao.NORTE, coluna, seg)
+
+        return candidato
+
+    def adicionar_incidente(self, direcao: Direcao, indice: int, seg_idx: int, duracao_s: int, fator: float) -> Incidente:
+        # remove duplicado
+        self.incidentes = [i for i in self.incidentes if not (i.direcao == direcao and i.indice == indice and i.seg_idx == seg_idx)]
+        inc = Incidente(direcao, indice, seg_idx, fator, int(duracao_s * CONFIG.FPS))
+        self.incidentes.append(inc)
+        return inc
+
+    def remover_incidente_chave(self, direcao: Direcao, indice: int, seg_idx: int) -> bool:
+        antes = len(self.incidentes)
+        self.incidentes = [i for i in self.incidentes if not (i.direcao == direcao and i.indice == indice and i.seg_idx == seg_idx)]
+        return len(self.incidentes) < antes
+
+    def toggle_incidente_por_pos(self, pos: Tuple[int, int], fator: float, duracao_s: int) -> bool:
+        """Cria/Remove no segmento clicado. Retorna True se criou, False se removeu/nada."""
+        loc = self._localizar_segmento_por_pos(pos)
+        if not loc or not CONFIG.INCIDENTES_ATIVOS:
+            return False
+        d, idx, seg = loc
+        # se já existe: remove
+        for i in self.incidentes:
+            if i.direcao == d and i.indice == idx and i.seg_idx == seg:
+                self.remover_incidente_chave(d, idx, seg)
+                return False
+        # senão cria
+        self.adicionar_incidente(d, idx, seg, duracao_s, fator)
+        return True
+
+    def remover_incidente_por_pos(self, pos: Tuple[int, int]) -> bool:
+        loc = self._localizar_segmento_por_pos(pos)
+        if not loc:
+            return False
+        d, idx, seg = loc
+        return self.remover_incidente_chave(d, idx, seg)
+
+    def atualizar_incidentes(self) -> None:
+        vivos = []
+        for inc in self.incidentes:
+            inc.restante_frames -= 1
+            if inc.restante_frames > 0:
+                vivos.append(inc)
+        self.incidentes = vivos
+
+    def _fator_incidente_para_pos(self, pos: Tuple[float, float], direcao: Direcao) -> float:
+        """Retorna fator multiplicativo (0..1) do incidente no segmento da via do veículo."""
+        if not CONFIG.INCIDENTES_ATIVOS or not self.incidentes:
             return 1.0
+        x, y = pos
+        if direcao == Direcao.LESTE:
+            linha = self._linha_mais_proxima(y)
+            seg = self._seg_idx_x(x)
+            fatores = [i.fator for i in self.incidentes if i.direcao == Direcao.LESTE and i.indice == linha and i.seg_idx == seg]
+        else:
+            coluna = self._coluna_mais_proxima(x)
+            seg = self._seg_idx_y(y)
+            fatores = [i.fator for i in self.incidentes if i.direcao == Direcao.NORTE and i.indice == coluna and i.seg_idx == seg]
+        if not fatores:
+            return 1.0
+        f = 1.0
+        for fi in fatores:
+            f *= fi  # compõe fatores (ex.: duas lentidões)
+        return max(0.0, min(1.0, f))
+
+    def _rect_incidente(self, inc: Incidente) -> pygame.Rect:
+        """Retângulo do segmento afetado para desenhar overlay."""
         seg = CONFIG.CHAOS_TAMANHO_SEGMENTO
-        if veiculo.direcao == Direcao.LESTE:
-            linha_mais_prox = max(0, min(
-                self.linhas - 1,
-                round((veiculo.posicao[1] - CONFIG.POSICAO_INICIAL_Y) / CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS)
-            ))
-            seg_x = max(0, min(self._caos_seg_h - 1, int(veiculo.posicao[0] // seg)))
-            return self.caos_horizontal[linha_mais_prox][seg_x]
-        elif veiculo.direcao == Direcao.NORTE:
-            coluna_mais_prox = max(0, min(
-                self.colunas - 1,
-                round((veiculo.posicao[0] - CONFIG.POSICAO_INICIAL_X) / CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS)
-            ))
-            seg_y = max(0, min(self._caos_seg_v - 1, int(veiculo.posicao[1] // seg)))
-            return self.caos_vertical[coluna_mais_prox][seg_y]
-        return 1.0
+        if inc.direcao == Direcao.LESTE:
+            y_c = CONFIG.POSICAO_INICIAL_Y + inc.indice * CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS
+            y_top = int(y_c - CONFIG.LARGURA_RUA // 2)
+            x_left = int(inc.seg_idx * seg)
+            return pygame.Rect(x_left, y_top, seg, CONFIG.LARGURA_RUA)
+        else:
+            x_c = CONFIG.POSICAO_INICIAL_X + inc.indice * CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS
+            x_left = int(x_c - CONFIG.LARGURA_RUA // 2)
+            y_top = int(inc.seg_idx * seg)
+            return pygame.Rect(x_left, y_top, CONFIG.LARGURA_RUA, seg)
 
-    def _criar_cruzamentos(self) -> None:
-        for linha in range(self.linhas):
-            for coluna in range(self.colunas):
-                x = CONFIG.POSICAO_INICIAL_X + coluna * CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS
-                y = CONFIG.POSICAO_INICIAL_Y + linha * CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS
-                id_cruzamento = (linha, coluna)
-                self.cruzamentos[id_cruzamento] = Cruzamento(
-                    (x, y), id_cruzamento, self.gerenciador_semaforos, self
-                )
+    def _desenhar_incidentes(self, tela: pygame.Surface) -> None:
+        if not self.incidentes:
+            return
+        for inc in self.incidentes:
+            # cor por tipo (bloqueio vs lentidão)
+            cor = CONFIG.INCIDENTE_COR_BLOQUEIO if inc.fator <= 0.01 else CONFIG.INCIDENTE_COR_LENTIDAO
+            rect = self._rect_incidente(inc)
+            surf = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
+            surf.fill(cor)
+            tela.blit(surf, rect.topleft)
+            # contador simples
+            fonte = pygame.font.SysFont('Arial', 12)
+            segundos = max(0, int(inc.restante_frames / CONFIG.FPS))
+            texto = f"{'BLQ' if inc.fator<=0.01 else 'LEN'} {segundos}s"
+            img = fonte.render(texto, True, (0, 0, 0))
+            tela.blit(img, (rect.x + 4, rect.y + 4))
 
-    def atualizar(self) -> None:
-        self.metricas['tempo_simulacao'] += 1
-        self.atualizar_caos()
-
-        for cruzamento in self.cruzamentos.values():
-            novos_veiculos = cruzamento.gerar_veiculos()
-            self.veiculos.extend(novos_veiculos)
-            self.metricas['veiculos_total'] += len(novos_veiculos)
-
-        for cruzamento in self.cruzamentos.values():
-            cruzamento.atualizar_veiculos(self.veiculos)
-
-        densidade_por_cruzamento = {}
-        for id_cruzamento, cruzamento in self.cruzamentos.items():
-            densidade_por_cruzamento[id_cruzamento] = cruzamento.obter_densidade_por_direcao()
-
-        self.gerenciador_semaforos.atualizar(densidade_por_cruzamento)
-
-        veiculos_ativos = []
-        for veiculo in self.veiculos:
-            if veiculo.ativo:
-                veiculos_ativos.append(veiculo)
+    # ---- FATOR DINÂMICO (CAOS * INCIDENTE) ----
+    def obter_fator_caos(self, veiculo: Veiculo) -> float:
+        # Base: caos (ou 1.0 se desativado)
+        if CONFIG.CHAOS_ATIVO:
+            seg = CONFIG.CHAOS_TAMANHO_SEGMENTO
+            if veiculo.direcao == Direcao.LESTE:
+                linha_mais_prox = max(0, min(
+                    self.linhas - 1,
+                    round((veiculo.posicao[1] - CONFIG.POSICAO_INICIAL_Y) / CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS)
+                ))
+                seg_x = max(0, min(self._caos_seg_h - 1, int(veiculo.posicao[0] // seg)))
+                fator = self.caos_horizontal[linha_mais_prox][seg_x]
+            elif veiculo.direcao == Direcao.NORTE:
+                coluna_mais_prox = max(0, min(
+                    self.colunas - 1,
+                    round((veiculo.posicao[0] - CONFIG.POSICAO_INICIAL_X) / CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS)
+                ))
+                seg_y = max(0, min(self._caos_seg_v - 1, int(veiculo.posicao[1] // seg)))
+                fator = self.caos_vertical[coluna_mais_prox][seg_y]
             else:
-                self.metricas['veiculos_concluidos'] += 1
-                self.metricas['tempo_viagem_total'] += veiculo.tempo_viagem
-                self.metricas['tempo_parado_total'] += veiculo.tempo_parado
-        self.veiculos = veiculos_ativos
+                fator = 1.0
+        else:
+            fator = 1.0
+
+        # Multiplica por incidente (0..1)
+        fator *= self._fator_incidente_para_pos(tuple(veiculo.posicao), veiculo.direcao)
+        return fator
 
     # ----------------- DESENHO DE RUAS COM MÚLTIPLAS FAIXAS -----------------
     def _desenhar_ruas(self, tela: pygame.Surface) -> None:
@@ -448,12 +566,62 @@ class MalhaViaria:
                 pygame.draw.polygon(tela, CONFIG.AMARELO, pontos)
 
     def desenhar(self, tela: pygame.Surface) -> None:
+        # Ruas
         self._desenhar_ruas(tela)
+        # Overlays de incidentes (entre ruas e objetos)
+        self._desenhar_incidentes(tela)
+        # Cruzamentos e semáforos
         for cruzamento in self.cruzamentos.values():
             cruzamento.desenhar(tela)
+        # Veículos
         for veiculo in self.veiculos:
             veiculo.desenhar(tela)
 
+    # ---- LOOP ----
+    def _criar_cruzamentos(self) -> None:
+        for linha in range(self.linhas):
+            for coluna in range(self.colunas):
+                x = CONFIG.POSICAO_INICIAL_X + coluna * CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS
+                y = CONFIG.POSICAO_INICIAL_Y + linha * CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS
+                id_cruzamento = (linha, coluna)
+                self.cruzamentos[id_cruzamento] = Cruzamento(
+                    (x, y), id_cruzamento, self.gerenciador_semaforos, self
+                )
+
+    def atualizar(self) -> None:
+        self.metricas['tempo_simulacao'] += 1
+        self.atualizar_caos()
+        self.atualizar_incidentes()
+
+        # Spawns
+        for cruzamento in self.cruzamentos.values():
+            novos_veiculos = cruzamento.gerar_veiculos()
+            self.veiculos.extend(novos_veiculos)
+            self.metricas['veiculos_total'] += len(novos_veiculos)
+
+        # Atualiza veículos por cruzamento
+        for cruzamento in self.cruzamentos.values():
+            cruzamento.atualizar_veiculos(self.veiculos)
+
+        # Densidades para heurística
+        densidade_por_cruzamento = {}
+        for id_cruzamento, cruzamento in self.cruzamentos.items():
+            densidade_por_cruzamento[id_cruzamento] = cruzamento.obter_densidade_por_direcao()
+
+        self.gerenciador_semaforos.atualizar(densidade_por_cruzamento)
+
+        # Limpa veículos inativos e agrega métricas
+        veiculos_ativos = []
+        for veiculo in self.veiculos:
+            if veiculo.ativo:
+                veiculos_ativos.append(veiculo)
+            else:
+                self.metricas['veiculos_concluidos'] += 1
+                self.metricas['tempo_viagem_total'] += veiculo.tempo_viagem
+                self.metricas['tempo_parado_total'] += veiculo.tempo_parado
+        self.veiculos = veiculos_ativos
+
+    # ---- Estatísticas + Controle ----
     def obter_estatisticas(self) -> Dict[str, any]:
         """Retorna estatísticas consolidadas para o painel."""
         veiculos_ativos = len(self.veiculos)

@@ -274,3 +274,46 @@ class Renderizador:
     def obter_fps(self) -> float:
         """Retorna o FPS atual."""
         return self.relogio.get_fps()
+
+    def _desenhar_controles(self) -> None:
+        largura_painel = 350
+        altura_painel = 190  # ↑ aumentei um pouco para caber novas linhas
+        x_painel = 20
+        y_painel = CONFIG.ALTURA_TELA - altura_painel - 20
+
+        superficie_painel = pygame.Surface((largura_painel, altura_painel))
+        superficie_painel.set_alpha(200)
+        superficie_painel.fill((40, 40, 50))
+        pygame.draw.rect(superficie_painel, CONFIG.CINZA, superficie_painel.get_rect(), 2)
+
+        y_texto = 10
+        titulo = "CONTROLES"
+        superficie_titulo = self.fontes['media'].render(titulo, True, CONFIG.BRANCO)
+        rect_titulo = superficie_titulo.get_rect(centerx=largura_painel // 2, y=y_texto)
+        superficie_painel.blit(superficie_titulo, rect_titulo)
+
+        y_texto = 35
+        controles = [
+            ("ESC", "Sair da simulação"),
+            ("ESPAÇO", "Pausar/Continuar"),
+            ("R", "Reiniciar simulação"),
+            ("+/-", "Ajustar velocidade"),
+            ("1-4", "Mudar heurística automática"),
+            ("5", "Modo Manual"),
+            ("N", "Avançar fase semáforos (Manual)"),
+            ("Clique", "Alternar semáforo (Manual)"),
+            ("I", "Modo Incidente ON/OFF"),
+            ("Clique (I)", "Bloqueio 15s"),
+            ("SHIFT+Clique (I)", "Lentidão 20s"),
+            ("Botão direito (I)", "Remover incidente"),
+            ("TAB", "Alternar estatísticas"),
+        ]
+
+        for tecla, descricao in controles:
+            superficie_tecla = self.fontes['pequena'].render(tecla, True, CONFIG.AMARELO)
+            superficie_desc = self.fontes['pequena'].render(descricao, True, CONFIG.BRANCO)
+            superficie_painel.blit(superficie_tecla, (20, y_texto))
+            superficie_painel.blit(superficie_desc, (100, y_texto))
+            y_texto += 18
+
+        self.tela.blit(superficie_painel, (x_painel, y_painel))

@@ -2,9 +2,14 @@ import random
 import math
 from typing import List, Dict, Tuple
 import pygame
-from configuracao import CONFIG, Direcao, TipoHeuristica
+from configuracao import CONFIG, Direcao, TipoHeuristica, TipoVeiculo
 from veiculo import Veiculo
 from semaforo import Semaforo, GerenciadorSemaforos
+
+
+def _offset_faixa(idx: int) -> float:
+    """Offset do centro da faixa em relação ao centro da via."""
+    return (idx - (CONFIG.NUM_FAIXAS - 1) / 2.0) * CONFIG.LARGURA_FAIXA
 
 
 class Cruzamento:
@@ -23,20 +28,15 @@ class Cruzamento:
         self.gerenciador_semaforos = gerenciador_semaforos
         self.malha = malha_viaria
 
-        # Veículos no cruzamento - APENAS DIREÇÕES PERMITIDAS
         self.veiculos_por_direcao: Dict[Direcao, List[Veiculo]] = {
-            Direcao.NORTE: [],  # Norte→Sul
-            Direcao.LESTE: []   # Leste→Oeste
+            Direcao.NORTE: [],
+            Direcao.LESTE: []
         }
 
-        # Configurações do cruzamento
         self.largura_rua = CONFIG.LARGURA_RUA
         self.limites = self._calcular_limites()
-
-        # Configurar semáforos
         self._configurar_semaforos()
 
-        # Estatísticas
         self.estatisticas = {
             'veiculos_processados': 0,
             'tempo_espera_acumulado': 0,
@@ -69,7 +69,6 @@ class Cruzamento:
     def pode_gerar_veiculo(self, direcao: Direcao) -> bool:
         if direcao not in CONFIG.DIRECOES_PERMITIDAS:
             return False
-
         linha, coluna = self.id
         pode_gerar = {
             Direcao.NORTE: linha == 0 and CONFIG.PONTOS_SPAWN['NORTE'],
@@ -79,38 +78,56 @@ class Cruzamento:
         }
         return pode_gerar.get(direcao, False)
 
+    def _posicao_spawn_por_faixa(self, direcao: Direcao, faixa_id: int) -> Tuple[float, float]:
+        """Calcula a posição de spawn alinhada ao centro da faixa escolhida."""
+        if direcao == Direcao.NORTE:
+            x = self.centro_x + _offset_faixa(faixa_id)
+            y = -50
+            return (x, y)
+        elif direcao == Direcao.LESTE:
+            x = -50
+            y = self.centro_y + _offset_faixa(faixa_id)
+            return (x, y)
+        return (0, 0)
+
+    # ---------- TIPOS: sorteio ponderado ----------
+    def _sortear_tipo_veiculo(self) -> TipoVeiculo:
+        tipos = [t for t in CONFIG.TIPOS_ATIVOS]
+        pesos = [CONFIG.DISTRIBUICAO_TIPOS.get(t, 0.0) for t in tipos]
+        # fallback se pesos não somarem nada
+        if sum(pesos) <= 0:
+            return TipoVeiculo.CARRO
+        return random.choices(tipos, weights=pesos, k=1)[0]
+
     def gerar_veiculos(self) -> List[Veiculo]:
         novos_veiculos = []
         for direcao in CONFIG.DIRECOES_PERMITIDAS:
             if not self.pode_gerar_veiculo(direcao):
                 continue
-
             if random.random() < CONFIG.TAXA_GERACAO_VEICULO:
-                posicao = self._calcular_posicao_inicial(direcao)
-                if self._tem_espaco_para_gerar(direcao, posicao):
-                    veiculo = Veiculo(direcao, posicao, self.id)
+                faixa_id = random.randrange(CONFIG.NUM_FAIXAS)
+                posicao = self._posicao_spawn_por_faixa(direcao, faixa_id)
+
+                # Escolhe tipo e testa espaço com parâmetros do tipo
+                tipo = self._sortear_tipo_veiculo()
+                if self._tem_espaco_para_gerar(direcao, posicao, tipo):
+                    veiculo = Veiculo(direcao, posicao, self.id, tipo=tipo)
+                    veiculo.faixa_id = faixa_id
                     novos_veiculos.append(veiculo)
                     self.veiculos_por_direcao[direcao].append(veiculo)
         return novos_veiculos
 
-    def _calcular_posicao_inicial(self, direcao: Direcao) -> Tuple[float, float]:
-        if direcao == Direcao.NORTE:
-            return (self.centro_x, -50)
-        elif direcao == Direcao.LESTE:
-            return (-50, self.centro_y)
-        else:
-            return (0, 0)
-
-    def _tem_espaco_para_gerar(self, direcao: Direcao, posicao: Tuple[float, float]) -> bool:
+    def _tem_espaco_para_gerar(self, direcao: Direcao, posicao: Tuple[float, float], tipo: TipoVeiculo) -> bool:
+        """Garante espaçamento mínimo no spawn considerando o TIPO do veículo."""
+        dist_min_tipo = CONFIG.PARAMS_TIPO_VEICULO.get(tipo, {}).get('dist_min', CONFIG.DISTANCIA_MIN_VEICULO)
         for veiculo in self.veiculos_por_direcao.get(direcao, []):
             dx = abs(veiculo.posicao[0] - posicao[0])
             dy = abs(veiculo.posicao[1] - posicao[1])
-
             if direcao == Direcao.NORTE:
-                if dy < CONFIG.DISTANCIA_MIN_VEICULO * 2:
+                if dy < dist_min_tipo * 2 and dx < CONFIG.LARGURA_FAIXA:
                     return False
             elif direcao == Direcao.LESTE:
-                if dx < CONFIG.DISTANCIA_MIN_VEICULO * 2:
+                if dx < dist_min_tipo * 2 and dy < CONFIG.LARGURA_FAIXA:
                     return False
         return True
 
@@ -127,14 +144,12 @@ class Cruzamento:
         for direcao in CONFIG.DIRECOES_PERMITIDAS:
             self.veiculos_por_direcao[direcao] = []
 
-        veiculos_proximos = []
         for veiculo in todos_veiculos:
             if veiculo.direcao in CONFIG.DIRECOES_PERMITIDAS and self._veiculo_proximo_ao_cruzamento(veiculo):
                 cruzamento_atual = self._determinar_cruzamento_veiculo(veiculo)
                 if cruzamento_atual == self.id:
                     veiculo.resetar_controle_semaforo(self.id)
                     self.veiculos_por_direcao[veiculo.direcao].append(veiculo)
-                    veiculos_proximos.append(veiculo)
 
         for direcao in CONFIG.DIRECOES_PERMITIDAS:
             veiculos = self.veiculos_por_direcao.get(direcao, [])
@@ -142,17 +157,15 @@ class Cruzamento:
                 continue
 
             veiculos_ordenados = self._ordenar_veiculos_por_posicao(veiculos, direcao)
-
             semaforos_cruz = self.gerenciador_semaforos.semaforos.get(self.id, {})
             semaforo = semaforos_cruz.get(direcao)
 
-            for i, veiculo in enumerate(veiculos_ordenados):
+            for veiculo in veiculos_ordenados:
                 veiculo.processar_todos_veiculos(todos_veiculos)
 
                 if semaforo:
                     posicao_parada = semaforo.obter_posicao_parada()
                     if self._veiculo_antes_da_linha(veiculo, posicao_parada):
-                        # >>> PASSA também todos os semáforos do cruzamento e o centro do cruzamento (para curvas)
                         veiculo.processar_semaforo(
                             semaforo,
                             posicao_parada,
@@ -192,12 +205,10 @@ class Cruzamento:
         return veiculos
 
     def obter_densidade_por_direcao(self) -> Dict[Direcao, int]:
-        return {
-            direcao: len(self.veiculos_por_direcao.get(direcao, []))
-            for direcao in CONFIG.DIRECOES_PERMITIDAS
-        }
+        return {d: len(self.veiculos_por_direcao.get(d, [])) for d in CONFIG.DIRECOES_PERMITIDAS}
 
     def desenhar(self, tela: pygame.Surface) -> None:
+        # área do cruzamento
         area_cruzamento = pygame.Rect(
             self.limites['esquerda'],
             self.limites['topo'],
@@ -207,6 +218,7 @@ class Cruzamento:
         pygame.draw.rect(tela, CONFIG.CINZA, area_cruzamento)
         self._desenhar_linhas_parada(tela)
 
+        # semáforos
         semaforos = self.gerenciador_semaforos.semaforos.get(self.id, {})
         for semaforo in semaforos.values():
             semaforo.desenhar(tela)
@@ -217,16 +229,13 @@ class Cruzamento:
     def _desenhar_linhas_parada(self, tela: pygame.Surface) -> None:
         cor_linha = CONFIG.BRANCO
         largura_linha = 3
-
-        # Linha Norte
-        pygame.draw.line(tela,
-                         cor_linha,
+        # Norte
+        pygame.draw.line(tela, cor_linha,
                          (self.limites['esquerda'], self.limites['topo'] - 20),
                          (self.limites['direita'], self.limites['topo'] - 20),
                          largura_linha)
-        # Linha Leste
-        pygame.draw.line(tela,
-                         cor_linha,
+        # Leste
+        pygame.draw.line(tela, cor_linha,
                          (self.limites['esquerda'] - 20, self.limites['topo']),
                          (self.limites['esquerda'] - 20, self.limites['base']),
                          largura_linha)
@@ -247,8 +256,10 @@ class MalhaViaria:
         self.veiculos: List[Veiculo] = []
         self.cruzamentos: Dict[Tuple[int, int], Cruzamento] = {}
         self.gerenciador_semaforos = GerenciadorSemaforos(CONFIG.HEURISTICA_ATIVA)
+
         self._inicializar_caos()
         self._criar_cruzamentos()
+
         self.metricas = {
             'tempo_simulacao': 0,
             'veiculos_total': 0,
@@ -324,8 +335,6 @@ class MalhaViaria:
             self.veiculos.extend(novos_veiculos)
             self.metricas['veiculos_total'] += len(novos_veiculos)
 
-        _ = self._organizar_veiculos_por_via()
-
         for cruzamento in self.cruzamentos.values():
             cruzamento.atualizar_veiculos(self.veiculos)
 
@@ -345,85 +354,66 @@ class MalhaViaria:
                 self.metricas['tempo_parado_total'] += veiculo.tempo_parado
         self.veiculos = veiculos_ativos
 
-    def _organizar_veiculos_por_via(self) -> Dict[Tuple[Direcao, int], List[Veiculo]]:
-        veiculos_por_via = {}
-        for veiculo in self.veiculos:
-            if veiculo.direcao == Direcao.NORTE:
-                via_x = round(veiculo.posicao[0] / CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS)
-                chave = (Direcao.NORTE, via_x)
-            elif veiculo.direcao == Direcao.LESTE:
-                via_y = round(veiculo.posicao[1] / CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS)
-                chave = (Direcao.LESTE, via_y)
-            else:
-                continue
-            if chave not in veiculos_por_via:
-                veiculos_por_via[chave] = []
-            veiculos_por_via[chave].append(veiculo)
-
-        for chave, veiculos in veiculos_por_via.items():
-            direcao = chave[0]
-            if direcao == Direcao.NORTE:
-                veiculos.sort(key=lambda v: v.posicao[1], reverse=True)
-            elif direcao == Direcao.LESTE:
-                veiculos.sort(key=lambda v: v.posicao[0], reverse=True)
-        return veiculos_por_via
-
-    def mudar_heuristica(self, nova_heuristica: TipoHeuristica) -> None:
-        self.gerenciador_semaforos.mudar_heuristica(nova_heuristica)
-
-    def obter_estatisticas(self) -> Dict[str, any]:
-        veiculos_ativos = len(self.veiculos)
-        tempo_viagem_medio = 0
-        tempo_parado_medio = 0
-        if self.metricas['veiculos_concluidos'] > 0:
-            tempo_viagem_medio = self.metricas['tempo_viagem_total'] / self.metricas['veiculos_concluidos'] / CONFIG.FPS
-            tempo_parado_medio = self.metricas['tempo_parado_total'] / self.metricas['veiculos_concluidos'] / CONFIG.FPS
-        return {
-            'veiculos_ativos': veiculos_ativos,
-            'veiculos_total': self.metricas['veiculos_total'],
-            'veiculos_concluidos': self.metricas['veiculos_concluidos'],
-            'tempo_viagem_medio': tempo_viagem_medio,
-            'tempo_parado_medio': tempo_parado_medio,
-            'heuristica': self.gerenciador_semaforos.obter_info_heuristica(),
-            'tempo_simulacao': self.metricas['tempo_simulacao'] / CONFIG.FPS
-        }
-
-    def desenhar(self, tela: pygame.Surface) -> None:
-        # Ruas horizontais
+    # ----------------- DESENHO DE RUAS COM MÚLTIPLAS FAIXAS -----------------
+    def _desenhar_ruas(self, tela: pygame.Surface) -> None:
+        # Horizontais (LESTE)
         for linha in range(self.linhas):
-            y = CONFIG.POSICAO_INICIAL_Y + linha * CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS
-            pygame.draw.rect(tela, CONFIG.CINZA_ESCURO,
-                             (0, y - CONFIG.LARGURA_RUA // 2,
-                              CONFIG.LARGURA_TELA, CONFIG.LARGURA_RUA))
-            self._desenhar_setas_horizontais(tela, y, Direcao.LESTE)
-            pygame.draw.line(tela, CONFIG.BRANCO,
-                             (0, y - CONFIG.LARGURA_RUA // 2),
-                             (CONFIG.LARGURA_TELA, y - CONFIG.LARGURA_RUA // 2), 2)
-            pygame.draw.line(tela, CONFIG.BRANCO,
-                             (0, y + CONFIG.LARGURA_RUA // 2),
-                             (CONFIG.LARGURA_TELA, y + CONFIG.LARGURA_RUA // 2), 2)
+            y_centro = CONFIG.POSICAO_INICIAL_Y + linha * CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS
+            y_top = y_centro - CONFIG.LARGURA_RUA // 2
 
-        # Ruas verticais
+            # Fundo
+            pygame.draw.rect(tela, CONFIG.CINZA_ESCURO,
+                             (0, y_top, CONFIG.LARGURA_TELA, CONFIG.LARGURA_RUA))
+
+            # Linhas de borda
+            pygame.draw.line(tela, CONFIG.BRANCO,
+                             (0, y_top), (CONFIG.LARGURA_TELA, y_top), 2)
+            pygame.draw.line(tela, CONFIG.BRANCO,
+                             (0, y_top + CONFIG.LARGURA_RUA),
+                             (CONFIG.LARGURA_TELA, y_top + CONFIG.LARGURA_RUA), 2)
+
+            # Divisórias de faixa (tracejadas)
+            for div in range(1, CONFIG.NUM_FAIXAS):
+                y = y_top + div * CONFIG.LARGURA_FAIXA
+                self._linha_tracejada_h(tela, y, 0, CONFIG.LARGURA_TELA, 18, 12, 2)
+
+            # Setas de direção (opcionais)
+            self._desenhar_setas_horizontais(tela, y_centro, Direcao.LESTE)
+
+        # Verticais (NORTE)
         for coluna in range(self.colunas):
-            x = CONFIG.POSICAO_INICIAL_X + coluna * CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS
+            x_centro = CONFIG.POSICAO_INICIAL_X + coluna * CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS
+            x_left = x_centro - CONFIG.LARGURA_RUA // 2
+
             pygame.draw.rect(tela, CONFIG.CINZA_ESCURO,
-                             (x - CONFIG.LARGURA_RUA // 2, 0,
-                              CONFIG.LARGURA_RUA, CONFIG.ALTURA_TELA))
-            self._desenhar_setas_verticais(tela, x, Direcao.NORTE)
-            pygame.draw.line(tela, CONFIG.BRANCO,
-                             (x - CONFIG.LARGURA_RUA // 2, 0),
-                             (x - CONFIG.LARGURA_RUA // 2, CONFIG.ALTURA_TELA), 2)
-            pygame.draw.line(tela, CONFIG.BRANCO,
-                             (x + CONFIG.LARGURA_RUA // 2, 0),
-                             (x + CONFIG.LARGURA_RUA // 2, CONFIG.ALTURA_TELA), 2)
+                             (x_left, 0, CONFIG.LARGURA_RUA, CONFIG.ALTURA_TELA))
 
-        # Cruzamentos
-        for cruzamento in self.cruzamentos.values():
-            cruzamento.desenhar(tela)
+            pygame.draw.line(tela, CONFIG.BRANCO,
+                             (x_left, 0), (x_left, CONFIG.ALTURA_TELA), 2)
+            pygame.draw.line(tela, CONFIG.BRANCO,
+                             (x_left + CONFIG.LARGURA_RUA, 0),
+                             (x_left + CONFIG.LARGURA_RUA, CONFIG.ALTURA_TELA), 2)
 
-        # Veículos
-        for veiculo in self.veiculos:
-            veiculo.desenhar(tela)
+            for div in range(1, CONFIG.NUM_FAIXAS):
+                x = x_left + div * CONFIG.LARGURA_FAIXA
+                self._linha_tracejada_v(tela, x, 0, CONFIG.ALTURA_TELA, 18, 12, 2)
+
+            self._desenhar_setas_verticais(tela, x_centro, Direcao.NORTE)
+
+    # util: linhas tracejadas
+    def _linha_tracejada_h(self, tela, y, x0, x1, dash=16, gap=10, esp=2):
+        x = x0
+        while x < x1:
+            xe = min(x + dash, x1)
+            pygame.draw.line(tela, CONFIG.CINZA_CLARO, (x, y), (xe, y), esp)
+            x += dash + gap
+
+    def _linha_tracejada_v(self, tela, x, y0, y1, dash=16, gap=10, esp=2):
+        y = y0
+        while y < y1:
+            ye = min(y + dash, y1)
+            pygame.draw.line(tela, CONFIG.CINZA_CLARO, (x, y), (x, ye), esp)
+            y += dash + gap
 
     def _desenhar_setas_horizontais(self, tela: pygame.Surface, y: float, direcao: Direcao) -> None:
         if not CONFIG.MOSTRAR_DIRECAO_FLUXO:
@@ -431,18 +421,14 @@ class MalhaViaria:
         intervalo = 100
         tamanho_seta = 15
         for x in range(50, CONFIG.LARGURA_TELA, intervalo):
-            perto_de_cruzamento = False
+            perto = False
             for coluna in range(self.colunas):
-                x_cruzamento = CONFIG.POSICAO_INICIAL_X + coluna * CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS
-                if abs(x - x_cruzamento) < CONFIG.LARGURA_RUA:
-                    perto_de_cruzamento = True
+                x_cr = CONFIG.POSICAO_INICIAL_X + coluna * CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS
+                if abs(x - x_cr) < CONFIG.LARGURA_RUA:
+                    perto = True
                     break
-            if not perto_de_cruzamento:
-                pontos = [
-                    (x - tamanho_seta, y - 5),
-                    (x - tamanho_seta, y + 5),
-                    (x, y)
-                ]
+            if not perto:
+                pontos = [(x - tamanho_seta, y - 5), (x - tamanho_seta, y + 5), (x, y)]
                 pygame.draw.polygon(tela, CONFIG.AMARELO, pontos)
 
     def _desenhar_setas_verticais(self, tela: pygame.Surface, x: float, direcao: Direcao) -> None:
@@ -451,16 +437,49 @@ class MalhaViaria:
         intervalo = 100
         tamanho_seta = 15
         for y in range(50, CONFIG.ALTURA_TELA, intervalo):
-            perto_de_cruzamento = False
+            perto = False
             for linha in range(self.linhas):
-                y_cruzamento = CONFIG.POSICAO_INICIAL_Y + linha * CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS
-                if abs(y - y_cruzamento) < CONFIG.LARGURA_RUA:
-                    perto_de_cruzamento = True
+                y_cr = CONFIG.POSICAO_INICIAL_Y + linha * CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS
+                if abs(y - y_cr) < CONFIG.LARGURA_RUA:
+                    perto = True
                     break
-            if not perto_de_cruzamento:
-                pontos = [
-                    (x - 5, y - tamanho_seta),
-                    (x + 5, y - tamanho_seta),
-                    (x, y)
-                ]
+            if not perto:
+                pontos = [(x - 5, y - tamanho_seta), (x + 5, y - tamanho_seta), (x, y)]
                 pygame.draw.polygon(tela, CONFIG.AMARELO, pontos)
+
+    def desenhar(self, tela: pygame.Surface) -> None:
+        self._desenhar_ruas(tela)
+        for cruzamento in self.cruzamentos.values():
+            cruzamento.desenhar(tela)
+        for veiculo in self.veiculos:
+            veiculo.desenhar(tela)
+
+    def obter_estatisticas(self) -> Dict[str, any]:
+        """Retorna estatísticas consolidadas para o painel."""
+        veiculos_ativos = len(self.veiculos)
+
+        tempo_viagem_medio = 0.0
+        tempo_parado_medio = 0.0
+        concl = self.metricas['veiculos_concluidos']
+
+        if concl > 0:
+            tempo_viagem_medio = (
+                self.metricas['tempo_viagem_total'] / concl / CONFIG.FPS
+            )
+            tempo_parado_medio = (
+                self.metricas['tempo_parado_total'] / concl / CONFIG.FPS
+            )
+
+        return {
+            'veiculos_ativos': veiculos_ativos,
+            'veiculos_total': self.metricas['veiculos_total'],
+            'veiculos_concluidos': self.metricas['veiculos_concluidos'],
+            'tempo_viagem_medio': tempo_viagem_medio,
+            'tempo_parado_medio': tempo_parado_medio,
+            'heuristica': self.gerenciador_semaforos.obter_info_heuristica(),
+            'tempo_simulacao': self.metricas['tempo_simulacao'] / CONFIG.FPS,
+        }
+
+    def mudar_heuristica(self, nova_heuristica: TipoHeuristica) -> None:
+        """Muda a heurística de controle de semáforos para toda a malha."""
+        self.gerenciador_semaforos.mudar_heuristica(nova_heuristica)

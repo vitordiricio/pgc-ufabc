@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import Dict, List, Tuple
 from enum import Enum, auto
 
 
@@ -27,15 +27,23 @@ class TipoHeuristica(Enum):
     MANUAL = auto()
 
 
+class TipoVeiculo(Enum):
+    """Tipos de veículos da simulação."""
+    CARRO = auto()
+    ONIBUS = auto()
+    CAMINHAO = auto()
+    MOTO = auto()
+
+
 @dataclass
 class Configuracao:
     """Configuração para a simulação com vias de mão única."""
-    # Configurações de tela
+    # Tela
     LARGURA_TELA: int = 1400
     ALTURA_TELA: int = 900
     FPS: int = 60
 
-    # Configurações da grade de cruzamentos
+    # Grade
     LINHAS_GRADE: int = 2
     COLUNAS_GRADE: int = 2
     ESPACAMENTO_ENTRE_CRUZAMENTOS: int = 200
@@ -52,50 +60,44 @@ class Configuracao:
     CINZA_CLARO: tuple[int, int, int] = (200, 200, 200)
     VERDE_ESCURO: tuple[int, int, int] = (0, 100, 0)
 
-    # Cores de veículos
+    # Cores veículos (fallback / aleatórias para tipos não mapeados)
     CORES_VEICULO: List[tuple[int, int, int]] = field(default_factory=lambda: [
-        (220, 50, 50),    # Vermelho
-        (50, 100, 200),   # Azul
-        (50, 180, 50),    # Verde
-        (255, 140, 0),    # Laranja
-        (148, 0, 211),    # Roxo
-        (255, 215, 0),    # Dourado
-        (0, 191, 255),    # Azul Claro
-        (255, 20, 147)    # Rosa
+        (220, 50, 50), (50, 100, 200), (50, 180, 50), (255, 140, 0),
+        (148, 0, 211), (255, 215, 0), (0, 191, 255), (255, 20, 147)
     ])
 
-    # Configurações da rua - AGORA MÃO ÚNICA
-    LARGURA_RUA: int = 40  # Reduzida pois só tem uma direção
-    LARGURA_FAIXA: int = 40  # Uma única faixa por direção
+    # ----------------------------
+    # Larguras / faixas da via
+    # ----------------------------
+    NUM_FAIXAS: int = 2                  # nº de faixas por via (mesmo valor p/ N e L)
+    LARGURA_FAIXA: int = 26              # px de cada faixa (>= largura do veículo)
+    LARGURA_RUA: int = 40                # será recalculado no __post_init__
 
     # =======================
     # Efeito "Caos" nas ruas
     # =======================
     CHAOS_ATIVO: bool = True
-    CHAOS_TAMANHO_SEGMENTO: int = 160    # px por trecho
-    CHAOS_FATOR_MIN: float = 0.6         # reduz limite local
-    CHAOS_FATOR_MAX: float = 1.2         # pode dar leve "boost"
-    CHAOS_PROB_MUTACAO: float = 0.002    # prob. (por segmento/frame) de mudar o fator
-    CHAOS_MOSTRAR: bool = False          # overlay visual dos trechos (debug)
+    CHAOS_TAMANHO_SEGMENTO: int = 160
+    CHAOS_FATOR_MIN: float = 0.6
+    CHAOS_FATOR_MAX: float = 1.2
+    CHAOS_PROB_MUTACAO: float = 0.002
+    CHAOS_MOSTRAR: bool = False
 
-    # Sistema de mão única: direções permitidas
+    # Direções ativas
     DIRECOES_PERMITIDAS: List[Direcao] = field(default_factory=lambda: [
-        Direcao.NORTE,  # Vertical: Norte→Sul (de cima para baixo)
-        Direcao.LESTE   # Horizontal: Leste→Oeste (da esquerda para direita)
+        Direcao.NORTE, Direcao.LESTE
     ])
 
-    # Pontos de spawn
+    # Spawn
     PONTOS_SPAWN: Dict[str, bool] = field(default_factory=lambda: {
-        'NORTE': True,   # Spawn no topo (vai para baixo)
-        'SUL': False,    # Desativado - mão única
-        'LESTE': True,   # Spawn na esquerda (vai para direita)
-        'OESTE': False   # Desativado - mão única
+        'NORTE': True, 'SUL': False, 'LESTE': True, 'OESTE': False
     })
 
-    # Configurações de veículos
+    # ===== Parâmetros globais legado (fallback) =====
     LARGURA_VEICULO: int = 25
     ALTURA_VEICULO: int = 35
     TAXA_GERACAO_VEICULO: float = 0.01
+
     VELOCIDADE_VEICULO: float = 0.5
     VELOCIDADE_MAX_VEICULO: float = 1.0
     VELOCIDADE_MIN_VEICULO: float = 0.0
@@ -107,43 +109,47 @@ class Configuracao:
     DISTANCIA_REACAO: int = 80
 
     # ---------
-    # VIRADAS
+    # VIRADAS (Item 1)
     # ---------
     HABILITAR_VIRADAS: bool = True
-    # Probabilidades por abordagem (por cruzamento) de decidir virar na próxima interseção
-    PROB_VIRAR_NORTE_PARA_LESTE: float = 0.25   # "esquerda" vindo do NORTE (N→L)
-    PROB_VIRAR_LESTE_PARA_NORTE: float = 0.25   # "direita" vindo do LESTE (L→N)
-    ESQUERDA_NORTE_PROTEGIDA: bool = True       # N→L só entra com LESTE vermelho
-    RAIO_CURVA: int = 28                        # raio do arco de 1/4 de circunferência (px)
-    ZONA_DECISAO_VIRADA: int = 80               # distância da linha de parada p/ decidir rota
-    MOSTRAR_TRAJETORIA_VIRADA: bool = False     # overlay (debug)
+    PROB_VIRAR_NORTE_PARA_LESTE: float = 0.25
+    PROB_VIRAR_LESTE_PARA_NORTE: float = 0.25
+    ESQUERDA_NORTE_PROTEGIDA: bool = True
+    RAIO_CURVA: int = 28
+    ZONA_DECISAO_VIRADA: int = 80
+    MOSTRAR_TRAJETORIA_VIRADA: bool = False
 
-    # Configurações de semáforo
+    # ---------
+    # TROCA DE FAIXA (Item 2)
+    # ---------
+    TROCA_FAIXA_ATIVA: bool = True
+    PROB_TENTAR_TROCAR: float = 0.03
+    VANTAGEM_MINIMA: float = 0.25
+    GAP_FRENTE_TROCA: float = 55.0
+    GAP_TRAS_TROCA: float = 35.0
+    DURACAO_TROCA_FRAMES: int = 45
+
+    # Semáforo
     TAMANHO_SEMAFORO: int = 12
     ESPACAMENTO_SEMAFORO: int = 4
-
-    # Tempos de semáforo padrão (em frames)
     TEMPO_SEMAFORO_PADRAO: Dict[EstadoSemaforo, int] = field(default_factory=lambda: {
-        EstadoSemaforo.VERDE: 180,    # 3 segundos
-        EstadoSemaforo.AMARELO: 60,   # 1 segundo
-        EstadoSemaforo.VERMELHO: 240  # 4 segundos
+        EstadoSemaforo.VERDE: 180, EstadoSemaforo.AMARELO: 60, EstadoSemaforo.VERMELHO: 240
     })
 
-    # Configurações de heurísticas
+    # Heurística
     HEURISTICA_ATIVA: TipoHeuristica = TipoHeuristica.ADAPTATIVA_DENSIDADE
     LIMIAR_DENSIDADE_BAIXA: int = 3
     LIMIAR_DENSIDADE_MEDIA: int = 6
     LIMIAR_DENSIDADE_ALTA: int = 10
-
-    TEMPO_VERDE_DENSIDADE_BAIXA: int = 120   # 2 s
-    TEMPO_VERDE_DENSIDADE_MEDIA: int = 180   # 3 s
-    TEMPO_VERDE_DENSIDADE_ALTA: int = 300    # 5 s
+    TEMPO_VERDE_DENSIDADE_BAIXA: int = 120
+    TEMPO_VERDE_DENSIDADE_MEDIA: int = 180
+    TEMPO_VERDE_DENSIDADE_ALTA: int = 300
 
     # Detecção
     DISTANCIA_DETECCAO_SEMAFORO: int = 120
     DISTANCIA_PARADA_SEMAFORO: int = 15
 
-    # Visuais
+    # Visual
     MOSTRAR_GRID: bool = True
     MOSTRAR_ESTATISTICAS: bool = True
     MOSTRAR_INFO_VEICULO: bool = False
@@ -154,10 +160,72 @@ class Configuracao:
 
     # Métricas
     COLETAR_METRICAS: bool = True
-    INTERVALO_METRICAS: int = 300  # 5 s
+    INTERVALO_METRICAS: int = 300
 
-    # Posição inicial da malha
+    # Posição
     MARGEM_TELA: int = 100
+
+    # =============== TIPOS DE VEÍCULO (Item 3) ===============
+    TIPOS_ATIVOS: List[TipoVeiculo] = field(default_factory=lambda: [
+        TipoVeiculo.CARRO, TipoVeiculo.MOTO, TipoVeiculo.ONIBUS, TipoVeiculo.CAMINHAO
+    ])
+
+    # Distribuição de spawn (soma ≈ 1.0)
+    DISTRIBUICAO_TIPOS: Dict[TipoVeiculo, float] = field(
+        default_factory=lambda: {
+            TipoVeiculo.CARRO: 0.60,
+            TipoVeiculo.MOTO: 0.15,
+            TipoVeiculo.ONIBUS: 0.10,
+            TipoVeiculo.CAMINHAO: 0.15,
+        }
+    )
+
+    # Parâmetros físicos/operacionais por tipo
+    # Notas:
+    # - 'largura' deve caber em LARGURA_FAIXA (26px)
+    # - 'comprimento' é o eixo longitudinal
+    PARAMS_TIPO_VEICULO: Dict[TipoVeiculo, Dict[str, float]] = field(
+        default_factory=lambda: {
+            TipoVeiculo.CARRO: {
+                'largura': 22, 'comprimento': 35,
+                'vel_min': 0.0, 'vel_base': 0.60, 'vel_max': 1.00,
+                'acel': 0.18, 'desac': 0.25, 'desac_emer': 0.50,
+                'dist_min': 45, 'dist_seg': 40, 'dist_reacao': 80,
+            },
+            TipoVeiculo.MOTO: {
+                'largura': 16, 'comprimento': 24,
+                'vel_min': 0.0, 'vel_base': 0.70, 'vel_max': 1.20,
+                'acel': 0.22, 'desac': 0.30, 'desac_emer': 0.60,
+                'dist_min': 30, 'dist_seg': 25, 'dist_reacao': 60,
+            },
+            TipoVeiculo.ONIBUS: {
+                'largura': 24, 'comprimento': 65,
+                'vel_min': 0.0, 'vel_base': 0.45, 'vel_max': 0.80,
+                'acel': 0.10, 'desac': 0.20, 'desac_emer': 0.45,
+                'dist_min': 60, 'dist_seg': 55, 'dist_reacao': 100,
+            },
+            TipoVeiculo.CAMINHAO: {
+                'largura': 24, 'comprimento': 70,
+                'vel_min': 0.0, 'vel_base': 0.50, 'vel_max': 0.85,
+                'acel': 0.12, 'desac': 0.22, 'desac_emer': 0.48,
+                'dist_min': 55, 'dist_seg': 50, 'dist_reacao': 95,
+            },
+        }
+    )
+
+    # Cores por tipo (opcional, para visual rápido do mix)
+    CORES_TIPO: Dict[TipoVeiculo, Tuple[int, int, int]] = field(
+        default_factory=lambda: {
+            TipoVeiculo.CARRO: (50, 100, 200),      # azul
+            TipoVeiculo.MOTO: (255, 215, 0),        # dourado
+            TipoVeiculo.ONIBUS: (220, 50, 50),      # vermelho
+            TipoVeiculo.CAMINHAO: (50, 180, 50),    # verde
+        }
+    )
+
+    def __post_init__(self):
+        # Ajusta a largura total da via para caber as faixas
+        self.LARGURA_RUA = max(self.LARGURA_RUA, self.NUM_FAIXAS * self.LARGURA_FAIXA)
 
     @property
     def POSICAO_INICIAL_X(self) -> int:

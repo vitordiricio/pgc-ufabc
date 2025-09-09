@@ -2,18 +2,33 @@ import random
 import math
 from typing import Tuple, Optional, List, Dict
 import pygame
-from configuracao import CONFIG, Direcao, EstadoSemaforo
+from configuracao import CONFIG, Direcao, EstadoSemaforo, TipoVeiculo
 from semaforo import Semaforo
 
 
+def _offset_faixa(idx: int) -> float:
+    return (idx - (CONFIG.NUM_FAIXAS - 1) / 2.0) * CONFIG.LARGURA_FAIXA
+
+
+def _ease_in_out_sine(t: float) -> float:
+    # Curva suave para troca de faixa
+    return 0.5 * (1 - math.cos(math.pi * max(0.0, min(1.0, t))))
+
+
 class Veiculo:
-    """Representa um veículo com suporte a viradas em cruzamentos (N→L esquerda, L→N direita)."""
+    """Veículo com viradas (Item 1) + múltiplas faixas e troca (Item 2) + TIPOS (Item 3)."""
 
     _contador_id = 0
 
-    def __init__(self, direcao: Direcao, posicao: Tuple[float, float], id_cruzamento_origem: Tuple[int, int]):
+    def __init__(
+        self,
+        direcao: Direcao,
+        posicao: Tuple[float, float],
+        id_cruzamento_origem: Tuple[int, int],
+        tipo: Optional[TipoVeiculo] = None
+    ):
         if direcao not in CONFIG.DIRECOES_PERMITIDAS:
-            raise ValueError(f"Direção {direcao} não permitida. Use apenas {CONFIG.DIRECOES_PERMITIDAS}")
+            raise ValueError(f"Direção {direcao} não permitida. Use {CONFIG.DIRECOES_PERMITIDAS}")
 
         Veiculo._contador_id += 1
         self.id = Veiculo._contador_id
@@ -23,14 +38,34 @@ class Veiculo:
         self.posicao_inicial = list(posicao)
         self.id_cruzamento_origem = id_cruzamento_origem
         self.id_cruzamento_atual = id_cruzamento_origem
-        self.cor = random.choice(CONFIG.CORES_VEICULO)
+
+        # ---------- Tipo de Veículo ----------
+        self.tipo: TipoVeiculo = tipo or TipoVeiculo.CARRO
+        params = CONFIG.PARAMS_TIPO_VEICULO.get(self.tipo, {})
+
+        # Dimensões
+        self.largura = int(params.get('largura', CONFIG.LARGURA_VEICULO))
+        self.altura = int(params.get('comprimento', CONFIG.ALTURA_VEICULO))
+
+        # Física
+        self.vmin = float(params.get('vel_min', CONFIG.VELOCIDADE_MIN_VEICULO))
+        self.velocidade_desejada = float(params.get('vel_base', CONFIG.VELOCIDADE_VEICULO))
+        self.vmax = float(params.get('vel_max', CONFIG.VELOCIDADE_MAX_VEICULO))
+
+        self.acel_base = float(params.get('acel', CONFIG.ACELERACAO_VEICULO))
+        self.desac = float(params.get('desac', CONFIG.DESACELERACAO_VEICULO))
+        self.desac_emer = float(params.get('desac_emer', CONFIG.DESACELERACAO_EMERGENCIA))
+
+        self.dist_min = float(params.get('dist_min', CONFIG.DISTANCIA_MIN_VEICULO))
+        self.dist_seguranca = float(params.get('dist_seg', CONFIG.DISTANCIA_SEGURANCA))
+        self.dist_reacao = float(params.get('dist_reacao', CONFIG.DISTANCIA_REACAO))
+
+        # Cor (prioriza cor por tipo)
+        self.cor = CONFIG.CORES_TIPO.get(self.tipo, random.choice(CONFIG.CORES_VEICULO))
+
+        # Estados dinâmicos
         self.ativo = True
-
-        self.largura = CONFIG.LARGURA_VEICULO
-        self.altura = CONFIG.ALTURA_VEICULO
-
         self.velocidade = 0.0
-        self.velocidade_desejada = CONFIG.VELOCIDADE_VEICULO
         self.aceleracao_atual = 0.0
 
         self.parado = True
@@ -39,26 +74,29 @@ class Veiculo:
         self.aguardando_semaforo = False
         self.em_desaceleracao = False
 
-        # Semáforo
         self.semaforo_proximo: Optional[Semaforo] = None
         self.ultimo_semaforo_processado: Optional[Semaforo] = None
         self.distancia_semaforo: float = float('inf')
         self.pode_passar_amarelo: bool = False
 
-        # Colisão / car-following
         self.veiculo_frente: Optional['Veiculo'] = None
         self.distancia_veiculo_frente: float = float('inf')
 
-        # Métricas
         self.tempo_viagem = 0
         self.tempo_parado = 0
         self.paradas_totais = 0
         self.distancia_percorrida = 0.0
 
+        # ---------- Faixas ----------
+        self.faixa_id: int = 0  # definido no spawn; default 0 por segurança
+        self.em_troca_faixa: bool = False
+        self.faixa_destino: Optional[int] = None
+        self.troca_t: float = 0.0
+        self._lateral_inicio: float = 0.0
+        self._lateral_fim: float = 0.0
+
         # ------------ VIRADAS ------------
-        # Próxima decisão de movimento na interseção (None = seguir reto)
         self.proxima_mudanca: Optional[Direcao] = None
-        # Estado interno de curva (quarter-arc)
         self.em_curva: bool = False
         self.curva_t: float = 0.0
         self.curva_raio: float = CONFIG.RAIO_CURVA
@@ -68,20 +106,49 @@ class Veiculo:
 
         self._atualizar_rect()
 
+    # -------- util de grade/lanes ----------
+    def _centro_via_atual(self) -> Tuple[float, float]:
+        """Retorna (x_centro_via, y_centro_via) do eixo da via onde o veículo está."""
+        if self.direcao == Direcao.LESTE:
+            idx_linha = round((self.posicao[1] - CONFIG.POSICAO_INICIAL_Y) / CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS)
+            y = CONFIG.POSICAO_INICIAL_Y + idx_linha * CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS
+            return (None, y)
+        elif self.direcao == Direcao.NORTE:
+            idx_col = round((self.posicao[0] - CONFIG.POSICAO_INICIAL_X) / CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS)
+            x = CONFIG.POSICAO_INICIAL_X + idx_col * CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS
+            return (x, None)
+        return (None, None)
+
+    def _centro_da_faixa(self) -> float:
+        """Coordenada lateral do centro da faixa atual."""
+        cx, cy = self._centro_via_atual()
+        if self.direcao == Direcao.LESTE:
+            return (cy or 0.0) + _offset_faixa(self.faixa_id)
+        elif self.direcao == Direcao.NORTE:
+            return (cx or 0.0) + _offset_faixa(self.faixa_id)
+        return 0.0
+
+    def _alinhar_na_faixa(self) -> None:
+        """Clampa a coordenada lateral para o centro da faixa (evita drift)."""
+        alvo = self._centro_da_faixa()
+        if self.direcao == Direcao.LESTE:
+            self.posicao[1] = alvo
+        elif self.direcao == Direcao.NORTE:
+            self.posicao[0] = alvo
+
+    # ---------- retângulo ----------
     def _atualizar_rect(self) -> None:
         if self.direcao == Direcao.NORTE:
             self.rect = pygame.Rect(
                 self.posicao[0] - self.largura // 2,
                 self.posicao[1] - self.altura // 2,
-                self.largura,
-                self.altura
+                self.largura, self.altura
             )
         elif self.direcao == Direcao.LESTE:
             self.rect = pygame.Rect(
                 self.posicao[0] - self.altura // 2,
                 self.posicao[1] - self.largura // 2,
-                self.altura,
-                self.largura
+                self.altura, self.largura
             )
 
     def resetar_controle_semaforo(self, novo_cruzamento_id: Optional[Tuple[int, int]] = None) -> None:
@@ -92,49 +159,30 @@ class Veiculo:
             self.pode_passar_amarelo = False
             self.semaforo_proximo = None
             self.distancia_semaforo = float('inf')
-            # Ao entrar num novo cruzamento, limpa decisão passada (permitindo novas viradas)
             self.proxima_mudanca = None
 
     # ----------------- DECISÃO DE VIRADA -----------------
     def _decidir_mudanca(self) -> None:
-        """Define a próxima manobra (reta/virar) ao aproximar da linha de parada."""
         if not CONFIG.HABILITAR_VIRADAS or self.proxima_mudanca is not None:
             return
         if self.direcao == Direcao.NORTE:
-            # N pode: seguir N (reto) ou virar N→L (esquerda)
-            if random.random() < CONFIG.PROB_VIRAR_NORTE_PARA_LESTE:
-                self.proxima_mudanca = Direcao.LESTE
-            else:
-                self.proxima_mudanca = Direcao.NORTE
+            self.proxima_mudanca = Direcao.LESTE if random.random() < CONFIG.PROB_VIRAR_NORTE_PARA_LESTE else Direcao.NORTE
         elif self.direcao == Direcao.LESTE:
-            # L pode: seguir L (reto) ou virar L→N (direita)
-            if random.random() < CONFIG.PROB_VIRAR_LESTE_PARA_NORTE:
-                self.proxima_mudanca = Direcao.NORTE
-            else:
-                self.proxima_mudanca = Direcao.LESTE
+            self.proxima_mudanca = Direcao.NORTE if random.random() < CONFIG.PROB_VIRAR_LESTE_PARA_NORTE else Direcao.LESTE
 
     def _virada_permitida(self, semaforos_cruz: Dict[Direcao, Semaforo]) -> bool:
-        """Regras de prioridade para iniciar a curva ao entrar no cruzamento."""
         if self.proxima_mudanca is None or self.proxima_mudanca == self.direcao:
-            return True  # seguir reto não tem restrição extra
-
-        # N→L (esquerda) — protegida por padrão (LESTE deve estar vermelho)
+            return True
         if self.direcao == Direcao.NORTE and self.proxima_mudanca == Direcao.LESTE:
             sem_leste = semaforos_cruz.get(Direcao.LESTE)
             if CONFIG.ESQUERDA_NORTE_PROTEGIDA:
                 return (sem_leste is not None) and (sem_leste.estado == EstadoSemaforo.VERMELHO)
-            else:
-                # Modo "permissivo" simplificado: evita quando LESTE está VERDE
-                return (sem_leste is None) or (sem_leste.estado != EstadoSemaforo.VERDE)
-
-        # L→N (direita) — permitido quando LESTE (abordagem atual) está verde (já garantido pela lógica)
+            return (sem_leste is None) or (sem_leste.estado != EstadoSemaforo.VERDE)
         if self.direcao == Direcao.LESTE and self.proxima_mudanca == Direcao.NORTE:
             return True
-
         return True
 
     def _iniciar_curva(self, centro_cruz: Tuple[float, float]) -> None:
-        """Inicializa parâmetros do arco de 1/4 de círculo para a virada."""
         if self.proxima_mudanca is None or self.proxima_mudanca == self.direcao:
             return
         cx, cy = centro_cruz
@@ -144,51 +192,35 @@ class Veiculo:
         self.curva_origem = self.direcao
         self.curva_destino = self.proxima_mudanca
 
-        # Ajusta posição de entrada no arco para evitar 'saltos' grandes
-        # N→L (esquerda): entra por cima do centro e sai à direita do centro
         if self.direcao == Direcao.NORTE and self.proxima_mudanca == Direcao.LESTE:
             self.curva_centro = (cx + r, cy - r)
-            # colar na entrada do arco
             self.posicao[0] = cx
             self.posicao[1] = cy - r
-        # L→N (direita): entra pela esquerda do centro e sai por baixo do centro
         elif self.direcao == Direcao.LESTE and self.proxima_mudanca == Direcao.NORTE:
             self.curva_centro = (cx - r, cy + r)
             self.posicao[0] = cx - r
             self.posicao[1] = cy
 
-        # durante a curva, mantemos velocidade atual e anulamos aceleração
         self.aceleracao_atual = 0.0
         self._atualizar_rect()
 
     def _atualizar_curva(self, dt: float) -> None:
-        """Avança a curva com base na velocidade atual, em um arco de 90°."""
         if not self.em_curva or self.curva_centro is None or self.curva_destino is None:
             return
-
         r = self.curva_raio
         comprimento = (math.pi / 2.0) * r
-        # delta em 't' proporcional à distância percorrida no quadro
-        delta_t = 0.0
-        if comprimento > 0:
-            delta_t = (self.velocidade * dt) / comprimento
-
+        delta_t = 0.0 if comprimento <= 0 else (self.velocidade * dt) / comprimento
         self.curva_t = min(1.0, self.curva_t + delta_t)
-        t = self.curva_t  # 0..1
+        t = self.curva_t
         theta = t * (math.pi / 2.0)
-
         cx, cy = self.curva_centro
 
         if self.curva_origem == Direcao.NORTE and self.curva_destino == Direcao.LESTE:
-            # Parametrização:
-            # inicia em (cx - r, cy?) — usamos forma que gera pontos contínuos
             x = cx - r * math.cos(theta)
             y = cy + r * math.sin(theta)
             self.posicao[0] = x
             self.posicao[1] = y
-
         elif self.curva_origem == Direcao.LESTE and self.curva_destino == Direcao.NORTE:
-            # centro (cx, cy), inicia em (cx, cy - r) "rotacionado" adequadamente
             x = cx + r * math.sin(theta)
             y = cy - r * math.cos(theta)
             self.posicao[0] = x
@@ -197,93 +229,95 @@ class Veiculo:
         self._atualizar_rect()
 
         if self.curva_t >= 1.0:
-            # Curva concluída: ajusta direção e limpa estado
             self.direcao = self.curva_destino
             self.em_curva = False
             self.curva_origem = None
             self.curva_destino = None
             self.curva_centro = None
-            # Após a curva, pode voltar a acelerar suavemente
-            self.aceleracao_atual = CONFIG.ACELERACAO_VEICULO * 0.5
+            # ao sair da curva, alinhar à faixa mais próxima
+            self._snap_para_faixa_mais_proxima()
+            self.aceleracao_atual = self.acel_base * 0.5
             self._atualizar_rect()
+
+    def _snap_para_faixa_mais_proxima(self) -> None:
+        """Após a curva, escolhe a faixa mais próxima e alinha ao centro."""
+        melhor = 0
+        melhor_dist = float('inf')
+        for f in range(CONFIG.NUM_FAIXAS):
+            alvo = (self._centro_via_atual()[1] if self.direcao == Direcao.LESTE
+                    else self._centro_via_atual()[0]) + _offset_faixa(f)
+            dist = abs((self.posicao[1] if self.direcao == Direcao.LESTE else self.posicao[0]) - alvo)
+            if dist < melhor_dist:
+                melhor_dist = dist
+                melhor = f
+        self.faixa_id = melhor
+        self._alinhar_na_faixa()
 
     # ----------------- COLISÃO / FOLLOWING -----------------
     def verificar_colisao_futura(self, todos_veiculos: List['Veiculo']) -> bool:
-        # Se está em curva, negligenciamos previsão de colisão com base retangular simples
-        if self.em_curva:
+        if self.em_curva or self.em_troca_faixa:
             return False
-
-        dx, dy = 0, 0
+        dx = dy = 0
         if self.direcao == Direcao.NORTE:
-            dy = self.velocidade + CONFIG.DISTANCIA_MIN_VEICULO / 2
+            dy = self.velocidade + self.dist_min / 2
         elif self.direcao == Direcao.LESTE:
-            dx = self.velocidade + CONFIG.DISTANCIA_MIN_VEICULO / 2
-
-        posicao_futura = [self.posicao[0] + dx, self.posicao[1] + dy]
-
+            dx = self.velocidade + self.dist_min / 2
+        pos_fut = [self.posicao[0] + dx, self.posicao[1] + dy]
         if self.direcao == Direcao.NORTE:
-            rect_futuro = pygame.Rect(
-                posicao_futura[0] - self.largura // 2,
-                posicao_futura[1] - self.altura // 2,
-                self.largura,
-                self.altura
-            )
+            rect_fut = pygame.Rect(pos_fut[0] - self.largura // 2, pos_fut[1] - self.altura // 2, self.largura, self.altura)
         else:
-            rect_futuro = pygame.Rect(
-                posicao_futura[0] - self.altura // 2,
-                posicao_futura[1] - self.largura // 2,
-                self.altura,
-                self.largura
-            )
+            rect_fut = pygame.Rect(pos_fut[0] - self.altura // 2, pos_fut[1] - self.largura // 2, self.altura, self.largura)
 
         for outro in todos_veiculos:
             if outro.id == self.id or not outro.ativo:
                 continue
-            if not self._mesma_via(outro):
+            if not self._mesma_via(outro):  # agora considera faixa
                 continue
-            rect_outro_expandido = outro.rect.inflate(10, 10)
-            if rect_futuro.colliderect(rect_outro_expandido):
+            if rect_fut.colliderect(outro.rect.inflate(10, 10)):
                 return True
         return False
 
     def processar_todos_veiculos(self, todos_veiculos: List['Veiculo']) -> None:
         if self.em_curva:
-            # durante a curva, ignoramos o líder retilíneo
             self.veiculo_frente = None
             self.distancia_veiculo_frente = float('inf')
             return
 
-        veiculo_mais_proximo = None
-        distancia_minima = float('inf')
-
+        # procurar líder apenas NA MESMA FAIXA
+        veiculo_mais_prox = None
+        dist_min = float('inf')
         for outro in todos_veiculos:
             if outro.id == self.id or not outro.ativo:
                 continue
             if self.direcao != outro.direcao or not self._mesma_via(outro):
                 continue
-
             if self.direcao == Direcao.NORTE:
                 if outro.posicao[1] > self.posicao[1]:
-                    distancia = outro.posicao[1] - self.posicao[1]
-                    if distancia < distancia_minima:
-                        distancia_minima = distancia
-                        veiculo_mais_proximo = outro
+                    d = outro.posicao[1] - self.posicao[1]
+                    if d < dist_min:
+                        dist_min = d
+                        veiculo_mais_prox = outro
             elif self.direcao == Direcao.LESTE:
                 if outro.posicao[0] > self.posicao[0]:
-                    distancia = outro.posicao[0] - self.posicao[0]
-                    if distancia < distancia_minima:
-                        distancia_minima = distancia
-                        veiculo_mais_proximo = outro
+                    d = outro.posicao[0] - self.posicao[0]
+                    if d < dist_min:
+                        dist_min = d
+                        veiculo_mais_prox = outro
 
-        if veiculo_mais_proximo:
-            self.veiculo_frente = veiculo_mais_proximo
-            self.distancia_veiculo_frente = distancia_minima
-            self.processar_veiculo_frente(veiculo_mais_proximo)
+        if veiculo_mais_prox:
+            self.veiculo_frente = veiculo_mais_prox
+            self.distancia_veiculo_frente = dist_min
+            self.processar_veiculo_frente(veiculo_mais_prox)
         else:
             self.veiculo_frente = None
             self.distancia_veiculo_frente = float('inf')
             if not self.aguardando_semaforo:
-                self.aceleracao_atual = CONFIG.ACELERACAO_VEICULO
+                self.aceleracao_atual = self.acel_base
+
+        # Avaliar troca de faixa (Item 2)
+        if CONFIG.TROCA_FAIXA_ATIVA and not self.em_troca_faixa and not self.em_curva:
+            if random.random() < CONFIG.PROB_TENTAR_TROCAR:
+                self._avaliar_e_tentar_troca(todos_veiculos)
 
     # ----------------- ATUALIZAÇÃO -----------------
     def atualizar(self, dt: float = 1.0, todos_veiculos: List['Veiculo'] = None, malha=None) -> None:
@@ -297,45 +331,62 @@ class Veiculo:
         else:
             self.parado = False
 
-        # Aceleração / limite local (caos)
+        # Aceleração / limites
         self.velocidade += self.aceleracao_atual * dt
-        fator = malha.obter_fator_caos(self) if malha is not None else 1.0
-        vmax_local = CONFIG.VELOCIDADE_MAX_VEICULO * fator
-        self.velocidade = max(CONFIG.VELOCIDADE_MIN_VEICULO, min(vmax_local, self.velocidade))
+        fator = 1.0
+        if malha is not None:
+            fator = malha.obter_fator_caos(self)
+        self.velocidade = max(self.vmin, min(self.vmax * fator, self.velocidade))
 
         # Colisão simples
-        if (todos_veiculos is not None) and self.velocidade > 0 and not self.em_curva:
+        if (todos_veiculos is not None) and self.velocidade > 0 and not self.em_curva and not self.em_troca_faixa:
             if self.verificar_colisao_futura(todos_veiculos):
                 self.velocidade = 0
                 self.aceleracao_atual = 0
                 self._atualizar_rect()
                 return
 
-        # Movimento
+        # Movimento longitudinal + lateral (troca/curva)
         if self.em_curva:
-            # Atualiza ao longo do arco
             self._atualizar_curva(dt)
-            # distância percorrida (aproximação)
             self.distancia_percorrida += self.velocidade * dt
-            self._atualizar_rect()
         else:
-            dx, dy = 0, 0
+            # troca de faixa suave (interpola lateral)
+            if self.em_troca_faixa:
+                self.troca_t = min(1.0, self.troca_t + 1.0 / CONFIG.DURACAO_TROCA_FRAMES)
+                t = _ease_in_out_sine(self.troca_t)
+                lateral = self._lateral_inicio + (self._lateral_fim - self._lateral_inicio) * t
+                if self.direcao == Direcao.LESTE:
+                    self.posicao[1] = lateral
+                else:
+                    self.posicao[0] = lateral
+                if self.troca_t >= 1.0:
+                    self.em_troca_faixa = False
+                    if self.faixa_destino is not None:
+                        self.faixa_id = self.faixa_destino
+                    self.faixa_destino = None
+                    self._alinhar_na_faixa()
+
+            # deslocamento no eixo do movimento
+            dx = dy = 0
             if self.direcao == Direcao.NORTE:
                 dy = self.velocidade
             elif self.direcao == Direcao.LESTE:
                 dx = self.velocidade
-
             self.posicao[0] += dx
             self.posicao[1] += dy
             self.distancia_percorrida += math.sqrt(dx ** 2 + dy ** 2)
-            self._atualizar_rect()
 
-        # Saída da tela
+            # manter centro da faixa quando não trocando
+            if not self.em_troca_faixa:
+                self._alinhar_na_faixa()
+
+        self._atualizar_rect()
+
+        # Fora da tela?
         margem = 100
-        if (self.posicao[0] < -margem or
-                self.posicao[0] > CONFIG.LARGURA_TELA + margem or
-                self.posicao[1] < -margem or
-                self.posicao[1] > CONFIG.ALTURA_TELA + margem):
+        if (self.posicao[0] < -margem or self.posicao[0] > CONFIG.LARGURA_TELA + margem or
+                self.posicao[1] < -margem or self.posicao[1] > CONFIG.ALTURA_TELA + margem):
             self.ativo = False
 
     # ----------------- SEMÁFORO -----------------
@@ -346,64 +397,53 @@ class Veiculo:
         semaforos_cruz: Dict[Direcao, Semaforo],
         centro_cruz: Tuple[float, float]
     ) -> None:
-        """Inclui decisão de virada na zona de decisão e início da curva quando permitido."""
         if not semaforo:
-            if not self.veiculo_frente or self.distancia_veiculo_frente > CONFIG.DISTANCIA_REACAO:
-                self.aceleracao_atual = CONFIG.ACELERACAO_VEICULO
+            if not self.veiculo_frente or self.distancia_veiculo_frente > self.dist_reacao:
+                self.aceleracao_atual = self.acel_base
             return
 
-        # Novo semáforo detectado?
         if self.ultimo_semaforo_processado != semaforo:
             self.passou_semaforo = False
             self.ultimo_semaforo_processado = semaforo
             self.pode_passar_amarelo = False
 
         if self.passou_semaforo:
-            if not self.veiculo_frente or self.distancia_veiculo_frente > CONFIG.DISTANCIA_REACAO:
-                self.aceleracao_atual = CONFIG.ACELERACAO_VEICULO
+            if not self.veiculo_frente or self.distancia_veiculo_frente > self.dist_reacao:
+                self.aceleracao_atual = self.acel_base
             return
 
-        # Distância até a linha de parada
         self.distancia_semaforo = self._calcular_distancia_ate_ponto(posicao_parada)
 
-        # Zona de decisão de rota (antes da linha)
         if CONFIG.HABILITAR_VIRADAS and self.distancia_semaforo <= CONFIG.ZONA_DECISAO_VIRADA:
             self._decidir_mudanca()
 
-        # Se já passou a linha, marca como passado e, se for virar, inicia curva (se permitido)
         if self._passou_da_linha(posicao_parada):
-            # Está autorizado a executar a virada agora?
             if self.proxima_mudanca and self.proxima_mudanca != self.direcao:
                 if self._virada_permitida(semaforos_cruz) and not self.em_curva:
                     self._iniciar_curva(centro_cruz)
             self.passou_semaforo = True
             self.aguardando_semaforo = False
-            if not self.veiculo_frente or self.distancia_veiculo_frente > CONFIG.DISTANCIA_REACAO:
-                self.aceleracao_atual = CONFIG.ACELERACAO_VEICULO
+            if not self.veiculo_frente or self.distancia_veiculo_frente > self.dist_reacao:
+                self.aceleracao_atual = self.acel_base
             return
 
-        # Lógica por estado do semáforo
         if semaforo.estado == EstadoSemaforo.VERDE:
-            self.aguardando_semaforo = False
-
-            # Se pretende virar, certifique-se de que é permitido entrar
+            # Evita iniciar troca de faixa muito perto do semáforo
             if self.proxima_mudanca and self.proxima_mudanca != self.direcao:
                 if not self._virada_permitida(semaforos_cruz):
-                    # Trate como um “pare” antes da linha de parada
                     self._aplicar_frenagem_para_parada(self.distancia_semaforo)
                     self.aguardando_semaforo = True
                     return
-
-            if not self.veiculo_frente or self.distancia_veiculo_frente > CONFIG.DISTANCIA_REACAO:
-                self.aceleracao_atual = CONFIG.ACELERACAO_VEICULO
+            self.aguardando_semaforo = False
+            if not self.veiculo_frente or self.distancia_veiculo_frente > self.dist_reacao:
+                self.aceleracao_atual = self.acel_base
 
         elif semaforo.estado == EstadoSemaforo.AMARELO:
             if self.pode_passar_amarelo:
                 self.aceleracao_atual = 0
             else:
-                tempo_ate_linha = self.distancia_semaforo / max(self.velocidade, 0.1)
-                if (tempo_ate_linha < 1.0 and
-                    self.velocidade > CONFIG.VELOCIDADE_VEICULO * 0.7 and
+                tempo = self.distancia_semaforo / max(self.velocidade, 0.1)
+                if (tempo < 1.0 and self.velocidade > self.velocidade_desejada * 0.7 and
                         self.distancia_semaforo < CONFIG.DISTANCIA_PARADA_SEMAFORO * 3):
                     self.pode_passar_amarelo = True
                     self.aceleracao_atual = 0
@@ -420,29 +460,106 @@ class Veiculo:
             else:
                 self._aplicar_frenagem_para_parada(self.distancia_semaforo)
 
+    # ----------------- TROCA DE FAIXA -----------------
+    def _avaliar_e_tentar_troca(self, todos: List['Veiculo']) -> None:
+        """Heurística simples: se líder está perto/lento, tenta faixa adjacente com gaps."""
+        if self.distancia_semaforo < CONFIG.DISTANCIA_DETECCAO_SEMAFORO * 0.6:
+            return  # evita troca muito perto do semáforo
+        if self.veiculo_frente is None:
+            return  # sem necessidade aparente
+
+        # ganho esperado
+        ganho = max(0.0, self.velocidade_desejada - self.veiculo_frente.velocidade)
+        if ganho < CONFIG.VANTAGEM_MINIMA:
+            return
+
+        candidatos = []
+        if self.faixa_id - 1 >= 0:
+            candidatos.append(self.faixa_id - 1)
+        if self.faixa_id + 1 < CONFIG.NUM_FAIXAS:
+            candidatos.append(self.faixa_id + 1)
+        random.shuffle(candidatos)
+
+        for alvo in candidatos:
+            if self._faixa_livre_para_trocar(todos, alvo):
+                self._iniciar_troca_para(alvo)
+                break
+
+    def _faixa_livre_para_trocar(self, todos: List['Veiculo'], faixa_alvo: int) -> bool:
+        """Checa gaps à frente e atrás na faixa alvo, na MESMA via (mesma rua)."""
+        dist_a_frente = float('inf')
+        dist_atras = float('inf')
+        vel_atras = 0.0
+
+        for outro in todos:
+            if outro.id == self.id or not outro.ativo or outro.direcao != self.direcao:
+                continue
+            if not self._mesma_rua(outro):
+                continue
+            if getattr(outro, "faixa_id", None) != faixa_alvo:
+                continue
+
+            if self.direcao == Direcao.NORTE:
+                delta = outro.posicao[1] - self.posicao[1]
+                if delta >= 0:  # à frente
+                    dist_a_frente = min(dist_a_frente, delta)
+                else:  # atrás
+                    if abs(delta) < dist_atras:
+                        dist_atras = abs(delta)
+                        vel_atras = outro.velocidade
+            else:
+                delta = outro.posicao[0] - self.posicao[0]
+                if delta >= 0:
+                    dist_a_frente = min(dist_a_frente, delta)
+                else:
+                    if abs(delta) < dist_atras:
+                        dist_atras = abs(delta)
+                        vel_atras = outro.velocidade
+
+        if dist_a_frente < CONFIG.GAP_FRENTE_TROCA:
+            return False
+        if dist_atras < CONFIG.GAP_TRAS_TROCA and vel_atras > 0.1:
+            return False
+        return True
+
+    def _iniciar_troca_para(self, faixa_alvo: int) -> None:
+        self.em_troca_faixa = True
+        self.faixa_destino = faixa_alvo
+        self.troca_t = 0.0
+        # lateral atual e final
+        atual = self._centro_da_faixa()
+        self._lateral_inicio = atual
+        # troca para o alvo: muda faixa_id temporário para computar alvo
+        old = self.faixa_id
+        self.faixa_id = faixa_alvo
+        alvo = self._centro_da_faixa()
+        self._lateral_fim = alvo
+        # restaura até finalizar
+        self.faixa_id = old
+
     # ----------------- FOLLOWING / UTIL -----------------
     def processar_veiculo_frente(self, veiculo_frente: 'Veiculo') -> None:
         if not veiculo_frente:
             return
         distancia = self._calcular_distancia_para_veiculo(veiculo_frente)
-        if distancia < CONFIG.DISTANCIA_MIN_VEICULO:
+        if distancia < self.dist_min:
             self.velocidade = 0
             self.aceleracao_atual = 0
             return
-        if distancia < CONFIG.DISTANCIA_REACAO:
+        if distancia < self.dist_reacao:
             velocidade_segura = self._calcular_velocidade_segura(distancia, veiculo_frente.velocidade)
             if self.velocidade > velocidade_segura:
-                if distancia < CONFIG.DISTANCIA_MIN_VEICULO * 1.5:
-                    self.aceleracao_atual = -CONFIG.DESACELERACAO_EMERGENCIA
+                if distancia < self.dist_min * 1.5:
+                    self.aceleracao_atual = -self.desac_emer
                 else:
-                    self.aceleracao_atual = -CONFIG.DESACELERACAO_VEICULO
+                    self.aceleracao_atual = -self.desac
             elif self.velocidade < velocidade_segura * 0.9:
-                self.aceleracao_atual = CONFIG.ACELERACAO_VEICULO * 0.3
+                self.aceleracao_atual = self.acel_base * 0.3
             else:
                 self.aceleracao_atual = 0
         else:
             if not self.aguardando_semaforo:
-                self.aceleracao_atual = CONFIG.ACELERACAO_VEICULO
+                self.aceleracao_atual = self.acel_base
 
     def _calcular_distancia_ate_ponto(self, ponto: Tuple[float, float]) -> float:
         if self.direcao == Direcao.NORTE:
@@ -462,7 +579,7 @@ class Veiculo:
     def _calcular_distancia_para_veiculo(self, outro: 'Veiculo') -> float:
         if self.direcao != outro.direcao:
             return float('inf')
-        if not self._mesma_via(outro):
+        if not self._mesma_via(outro):  # mesma FAIXA
             return float('inf')
         dx = outro.posicao[0] - self.posicao[0]
         dy = outro.posicao[1] - self.posicao[1]
@@ -474,37 +591,45 @@ class Veiculo:
                 return max(0, dx - (self.altura + outro.altura) / 2)
         return float('inf')
 
-    def _mesma_via(self, outro: 'Veiculo') -> bool:
-        tolerancia = CONFIG.LARGURA_RUA * 0.8
+    def _mesma_rua(self, outro: 'Veiculo') -> bool:
+        """Mesma rua (ignora faixa). Usa tolerância lateral pela largura total da via."""
+        tolerancia = CONFIG.LARGURA_RUA * 0.5
         if self.direcao == Direcao.NORTE:
             return abs(self.posicao[0] - outro.posicao[0]) < tolerancia
         elif self.direcao == Direcao.LESTE:
             return abs(self.posicao[1] - outro.posicao[1]) < tolerancia
         return False
 
+    def _mesma_via(self, outro: 'Veiculo') -> bool:
+        """Mesma via E MESMA FAIXA (para car-following e colisão)."""
+        if not self._mesma_rua(outro):
+            return False
+        return getattr(self, "faixa_id", 0) == getattr(outro, "faixa_id", -1)
+
     def _calcular_velocidade_segura(self, distancia: float, velocidade_lider: float) -> float:
-        if distancia < CONFIG.DISTANCIA_MIN_VEICULO:
+        if distancia < self.dist_min:
             return 0
         tempo_reacao = 1.0
-        distancia_segura = CONFIG.DISTANCIA_SEGURANCA + velocidade_lider * tempo_reacao
+        distancia_segura = self.dist_seguranca + velocidade_lider * tempo_reacao
         if distancia < distancia_segura:
             fator = distancia / distancia_segura
             return max(0.0, velocidade_lider * fator)
-        return CONFIG.VELOCIDADE_VEICULO
+        return self.velocidade_desejada
 
     def _aplicar_frenagem_para_parada(self, distancia: float) -> None:
         if distancia < CONFIG.DISTANCIA_PARADA_SEMAFORO:
-            self.aceleracao_atual = -CONFIG.DESACELERACAO_EMERGENCIA
+            self.aceleracao_atual = -self.desac_emer
             self.velocidade_desejada = 0
             if distancia < CONFIG.DISTANCIA_PARADA_SEMAFORO / 2:
                 self.velocidade = 0.0
         else:
             if self.velocidade > 0.1:
-                desaceleracao_necessaria = (self.velocidade ** 2) / (2 * distancia)
-                self.aceleracao_atual = -min(desaceleracao_necessaria, CONFIG.DESACELERACAO_VEICULO)
+                desac = (self.velocidade ** 2) / (2 * distancia)
+                self.aceleracao_atual = -min(desac, self.desac)
             else:
                 self.aceleracao_atual = 0
 
+    # ----------------- DESENHO -----------------
     def desenhar(self, tela: pygame.Surface) -> None:
         if self.direcao == Direcao.NORTE:
             superficie = pygame.Surface((self.largura, self.altura), pygame.SRCALPHA)
@@ -516,18 +641,14 @@ class Veiculo:
         cor_janela = (200, 220, 255, 180)
         if self.direcao == Direcao.NORTE:
             pygame.draw.rect(superficie, cor_janela,
-                             (3, self.altura * 0.7, self.largura - 6, self.altura * 0.25),
-                             border_radius=2)
+                             (3, self.altura * 0.7, self.largura - 6, self.altura * 0.25), border_radius=2)
             pygame.draw.rect(superficie, cor_janela,
-                             (3, 3, self.largura - 6, self.altura * 0.3),
-                             border_radius=2)
+                             (3, 3, self.largura - 6, self.altura * 0.3), border_radius=2)
         else:
             pygame.draw.rect(superficie, cor_janela,
-                             (self.altura * 0.7, 3, self.altura * 0.25, self.largura - 6),
-                             border_radius=2)
+                             (self.altura * 0.7, 3, self.altura * 0.25, self.largura - 6), border_radius=2)
             pygame.draw.rect(superficie, cor_janela,
-                             (3, 3, self.altura * 0.3, self.largura - 6),
-                             border_radius=2)
+                             (3, 3, self.altura * 0.3, self.largura - 6), border_radius=2)
 
         if self.aceleracao_atual < -0.1:
             cor_freio = (255, 100, 100)
@@ -549,14 +670,13 @@ class Veiculo:
         rect = superficie.get_rect(center=(int(self.posicao[0]), int(self.posicao[1])))
         tela.blit(superficie, rect)
 
-        # (Opcional) Trajetória de depuração para curvas
         if CONFIG.MOSTRAR_INFO_VEICULO:
             fonte = pygame.font.SysFont('Arial', 10)
-            aguardando = ""
+            tag = f"{self.tipo.name[:3]} F{self.faixa_id}"
+            if self.em_troca_faixa:
+                tag += "⇄"
             if self.aguardando_semaforo:
-                aguardando = "🔴"
-            elif self.veiculo_frente and self.distancia_veiculo_frente < CONFIG.DISTANCIA_REACAO:
-                aguardando = "🚗"
-            texto = f"V:{self.velocidade:.1f} ID:{self.id} {aguardando}"
-            superficie_texto = fonte.render(texto, True, CONFIG.BRANCO)
-            tela.blit(superficie_texto, (self.posicao[0] - 20, self.posicao[1] - 25))
+                tag += " 🔴"
+            texto = f"V:{self.velocidade:.1f} {tag}"
+            tela.blit(fonte.render(texto, True, CONFIG.BRANCO),
+                      (self.posicao[0] - 22, self.posicao[1] - 25))

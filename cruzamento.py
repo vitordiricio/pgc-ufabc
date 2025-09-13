@@ -1,3 +1,4 @@
+# cruzamento.py
 import random
 import math
 from dataclasses import dataclass
@@ -119,24 +120,45 @@ class Cruzamento:
                 posicao = self._posicao_spawn_por_faixa(direcao, faixa_id)
                 tipo = self._sortear_tipo_veiculo()
                 if self._tem_espaco_para_gerar(direcao, posicao, tipo):
-                    veiculo = Veiculo(direcao, posicao, self.id, tipo=tipo)  # requer Veiculo aceitar "tipo"
+                    veiculo = Veiculo(direcao, posicao, self.id, tipo=tipo)
                     veiculo.faixa_id = faixa_id
                     novos_veiculos.append(veiculo)
                     self.veiculos_por_direcao[direcao].append(veiculo)
         return novos_veiculos
 
     def _tem_espaco_para_gerar(self, direcao: Direcao, posicao: Tuple[float, float], tipo: TipoVeiculo) -> bool:
-        """Respeita distância mínima do tipo ao gerar em uma faixa."""
+        """Verifica com margem de segurança aumentada para evitar colisões no spawn."""
         dist_min_tipo = CONFIG.PARAMS_TIPO_VEICULO.get(tipo, {}).get('dist_min', CONFIG.DISTANCIA_MIN_VEICULO)
+        
+        # Margem de segurança maior para spawn
+        margem_seguranca = dist_min_tipo * 3
+        
         for veiculo in self.veiculos_por_direcao.get(direcao, []):
             dx = abs(veiculo.posicao[0] - posicao[0])
             dy = abs(veiculo.posicao[1] - posicao[1])
+            
             if direcao == Direcao.NORTE:
-                if dy < dist_min_tipo * 2 and dx < CONFIG.LARGURA_FAIXA:
-                    return False
+                # Verifica se está na mesma faixa ou adjacente
+                if dx < CONFIG.LARGURA_FAIXA * 1.5:
+                    if dy < margem_seguranca:
+                        return False
             elif direcao == Direcao.LESTE:
-                if dx < dist_min_tipo * 2 and dy < CONFIG.LARGURA_FAIXA:
-                    return False
+                # Verifica se está na mesma faixa ou adjacente
+                if dy < CONFIG.LARGURA_FAIXA * 1.5:
+                    if dx < margem_seguranca:
+                        return False
+                        
+        # Verificação adicional: não gerar se houver veículo muito próximo em qualquer faixa
+        for veiculo in self.malha.veiculos:
+            if not veiculo.ativo:
+                continue
+                
+            dist = math.sqrt((veiculo.posicao[0] - posicao[0])**2 + 
+                           (veiculo.posicao[1] - posicao[1])**2)
+            
+            if dist < dist_min_tipo * 2:
+                return False
+                
         return True
 
     def _determinar_cruzamento_veiculo(self, veiculo: Veiculo) -> Tuple[int, int]:

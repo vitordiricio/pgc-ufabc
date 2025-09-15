@@ -2,13 +2,8 @@
 
 ## 1. Código
 
-- [ ] Evitar colisão de carros
-- [ ] Colocar efeito caos aleatório em cada rua/avenida
-- [ ] Controle individual dos semáforos (ao clicar)
-- [ ] Integração com LLM (LLama)
+- [ ] Corrigir erro de colisão
 - [ ] Melhorar relatoria para decisão de "vencedor"
-
-## 2. Relatório
-
-- [ ] Geração de diagrama "UML"
-- [ ] Relatório em si
+- [ ] Integrar LLM LLama
+- [ ] Implementar Manager
+- [ ] Refatorar o Código

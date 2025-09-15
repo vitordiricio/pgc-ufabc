@@ -254,19 +254,119 @@ class Veiculo:
         self.faixa_id = melhor
         self._alinhar_na_faixa()
 
+    def _resolver_colisao_imediata(self, todos_veiculos: List['Veiculo']) -> None:
+        """Resolve colisão imediata movendo veículos para posições seguras."""
+        # Encontra veículos em colisão
+        veiculos_colidindo = []
+        for outro in todos_veiculos:
+            if outro.id == self.id or not outro.ativo:
+                continue
+            if self.rect.colliderect(outro.rect):
+                veiculos_colidindo.append(outro)
+        
+        if not veiculos_colidindo:
+            return
+        
+        # Para cada veículo colidindo, move-o para uma posição segura
+        for outro in veiculos_colidindo:
+            # Calcula vetor de separação
+            dx = self.posicao[0] - outro.posicao[0]
+            dy = self.posicao[1] - outro.posicao[1]
+            
+            # Evita divisão por zero
+            if dx == 0 and dy == 0:
+                dx = random.uniform(-1, 1)
+                dy = random.uniform(-1, 1)
+            
+            # Normaliza o vetor
+            dist = math.sqrt(dx**2 + dy**2)
+            if dist > 0:
+                dx /= dist
+                dy /= dist
+            
+            # Distância mínima de separação (maior para garantir separação)
+            dist_separacao = (self.largura + outro.largura) / 2 + 50
+            
+            # Move este veículo para longe do outro
+            self.posicao[0] += dx * dist_separacao * 0.8
+            self.posicao[1] += dy * dist_separacao * 0.8
+            
+            # Move o outro veículo na direção oposta
+            outro.posicao[0] -= dx * dist_separacao * 0.2
+            outro.posicao[1] -= dy * dist_separacao * 0.2
+            
+            # Atualiza retângulos
+            self._atualizar_rect()
+            outro._atualizar_rect()
+            
+            # Para os veículos temporariamente para evitar movimento contínuo
+            self.velocidade = 0
+            outro.velocidade = 0
+            self.aceleracao_atual = 0
+            outro.aceleracao_atual = 0
+            
+            # Alinha na faixa se possível
+            if not self.em_curva and not self.em_troca_faixa:
+                self._alinhar_na_faixa()
+            if not outro.em_curva and not outro.em_troca_faixa:
+                outro._alinhar_na_faixa()
+
+    def _tentar_liberar_veiculo_preso(self, todos_veiculos: List['Veiculo']) -> None:
+        """Tenta liberar um veículo preso movendo-o para uma posição segura."""
+        # Encontra uma posição segura próxima
+        posicoes_tentativas = [
+            [self.posicao[0] + 50, self.posicao[1]],
+            [self.posicao[0] - 50, self.posicao[1]],
+            [self.posicao[0], self.posicao[1] + 50],
+            [self.posicao[0], self.posicao[1] - 50],
+            [self.posicao[0] + 100, self.posicao[1]],
+            [self.posicao[0] - 100, self.posicao[1]],
+            [self.posicao[0], self.posicao[1] + 100],
+            [self.posicao[0], self.posicao[1] - 100],
+        ]
+        
+        for pos_tentativa in posicoes_tentativas:
+            # Cria retângulo temporário para a posição tentativa
+            if self.direcao == Direcao.NORTE:
+                rect_tentativa = pygame.Rect(
+                    pos_tentativa[0] - self.largura // 2,
+                    pos_tentativa[1] - self.altura // 2,
+                    self.largura, self.altura
+                )
+            else:
+                rect_tentativa = pygame.Rect(
+                    pos_tentativa[0] - self.altura // 2,
+                    pos_tentativa[1] - self.largura // 2,
+                    self.altura, self.largura
+                )
+            
+            # Verifica se a posição é segura
+            posicao_segura = True
+            for outro in todos_veiculos:
+                if outro.id == self.id or not outro.ativo:
+                    continue
+                if rect_tentativa.colliderect(outro.rect):
+                    posicao_segura = False
+                    break
+            
+            if posicao_segura:
+                # Move o veículo para a posição segura
+                self.posicao = pos_tentativa.copy()
+                self._atualizar_rect()
+                self.velocidade = 1.0  # Velocidade baixa para começar
+                self.aceleracao_atual = 0
+                self.tempo_parado = 0  # Reset do tempo parado
+                break
+
     # ----------------- COLISÃO / FOLLOWING - MELHORADO -----------------
     def verificar_colisao_completa(self, todos_veiculos: List['Veiculo']) -> bool:
         """Verificação robusta de colisão em todas as situações."""
-        # Margem de segurança maior para evitar colisões
-        margem_seguranca = 25
-        rect_expandido = self.rect.inflate(margem_seguranca, margem_seguranca)
-        
         for outro in todos_veiculos:
             if outro.id == self.id or not outro.ativo:
                 continue
             
-            # Verifica colisão com rect expandido
-            if rect_expandido.colliderect(outro.rect):
+            # Verifica colisão real (sem margem de segurança)
+            if self.rect.colliderect(outro.rect):
                 return True
                 
         return False
@@ -274,7 +374,7 @@ class Veiculo:
     def verificar_colisao_futura(self, todos_veiculos: List['Veiculo']) -> bool:
         """Verifica colisões futuras considerando movimento."""
         # Calcula posição futura
-        passos_futuro = 2  # Verifica 2 frames à frente (reduzido para evitar paradas excessivas)
+        passos_futuro = 1  # Verifica apenas 1 frame à frente para evitar paradas excessivas
         dx = dy = 0
         
         if not self.em_curva:
@@ -291,30 +391,28 @@ class Veiculo:
         
         pos_fut = [self.posicao[0] + dx, self.posicao[1] + dy]
         
-        # Cria retângulo futuro com margem menor para evitar paradas desnecessárias
-        margem = 15
+        # Cria retângulo futuro sem margem de segurança
         if self.direcao == Direcao.NORTE or (self.em_curva and self.curva_origem == Direcao.NORTE):
             rect_fut = pygame.Rect(
-                pos_fut[0] - self.largura // 2 - margem // 2,
-                pos_fut[1] - self.altura // 2 - margem // 2,
-                self.largura + margem,
-                self.altura + margem
+                pos_fut[0] - self.largura // 2,
+                pos_fut[1] - self.altura // 2,
+                self.largura,
+                self.altura
             )
         else:
             rect_fut = pygame.Rect(
-                pos_fut[0] - self.altura // 2 - margem // 2,
-                pos_fut[1] - self.largura // 2 - margem // 2,
-                self.altura + margem,
-                self.largura + margem
+                pos_fut[0] - self.altura // 2,
+                pos_fut[1] - self.largura // 2,
+                self.altura,
+                self.largura
             )
 
         for outro in todos_veiculos:
             if outro.id == self.id or not outro.ativo:
                 continue
             
-            # Verifica colisão com qualquer veículo próximo
-            rect_outro_expandido = outro.rect.inflate(10, 10)
-            if rect_fut.colliderect(rect_outro_expandido):
+            # Verifica colisão com veículo próximo
+            if rect_fut.colliderect(outro.rect):
                 return True
                 
         return False
@@ -432,26 +530,26 @@ class Veiculo:
 
         # Verificação de segurança anti-colisão absoluta
         if todos_veiculos:
-            # Verifica colisão atual
+            # Verifica colisão atual e resolve se necessário
             if self.verificar_colisao_completa(todos_veiculos):
+                self._resolver_colisao_imediata(todos_veiculos)
                 self.velocidade = 0
                 self.aceleracao_atual = -self.desac_emer
                 self._atualizar_rect()
                 return
             
-            # Verifica colisão futura apenas se velocidade for significativa
-            if self.velocidade > 0.5:
-                if self.verificar_colisao_futura(todos_veiculos):
-                    # Reduz velocidade gradualmente
-                    self.velocidade *= 0.7
-                    self.aceleracao_atual = -self.desac
-                    
-                    # Se ainda há risco, para completamente
-                    if self.verificar_colisao_futura(todos_veiculos):
-                        self.velocidade = 0
-                        self.aceleracao_atual = 0
-                        self._atualizar_rect()
-                        return
+            # Verifica se o veículo está preso (velocidade muito baixa por muito tempo)
+            if self.velocidade < 0.1 and self.tempo_parado > 5.0:
+                # Tenta mover o veículo para uma posição segura
+                self._tentar_liberar_veiculo_preso(todos_veiculos)
+            
+            # Verifica colisão futura e ajusta velocidade ANTES de acelerar
+            if self.verificar_colisao_futura(todos_veiculos):
+                # Para completamente se há risco de colisão
+                self.velocidade = 0
+                self.aceleracao_atual = -self.desac_emer
+                self._atualizar_rect()
+                return
 
         # Aceleração / limites
         self.velocidade += self.aceleracao_atual * dt
@@ -484,9 +582,9 @@ class Veiculo:
             # Deslocamento no eixo do movimento
             dx = dy = 0
             if self.direcao == Direcao.NORTE:
-                dy = self.velocidade
+                dy = self.velocidade * dt
             elif self.direcao == Direcao.LESTE:
-                dx = self.velocidade
+                dx = self.velocidade * dt
             
             # Verificação final antes de mover
             pos_temp = [self.posicao[0] + dx, self.posicao[1] + dy]
@@ -507,11 +605,11 @@ class Veiculo:
                         self.altura, self.largura
                     )
                 
-                # Verifica se movimento é seguro com margem menor
+                # Verifica se movimento é seguro
                 for outro in todos_veiculos:
                     if outro.id == self.id or not outro.ativo:
                         continue
-                    if rect_temp.colliderect(outro.rect.inflate(2, 2)):
+                    if rect_temp.colliderect(outro.rect):
                         pode_mover = False
                         break
             
@@ -520,9 +618,9 @@ class Veiculo:
                 self.posicao[1] += dy
                 self.distancia_percorrida += math.sqrt(dx ** 2 + dy ** 2)
             else:
-                # Reduz velocidade gradualmente em vez de parar completamente
-                self.velocidade *= 0.8
-                self.aceleracao_atual = -self.desac
+                # Para completamente se não pode mover
+                self.velocidade = 0
+                self.aceleracao_atual = -self.desac_emer
 
             # Manter centro da faixa quando não trocando
             if not self.em_troca_faixa:

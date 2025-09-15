@@ -48,7 +48,7 @@ def exibir_introducao():
     print("  • ESC: Sair")
     print("  • CTRL+S: Salvar relatório")
     print("="*60)
-    input("\nPressione ENTER para iniciar a simulação...")
+    print("\nIniciando simulação automaticamente...")
 
 
 def configurar_ambiente():

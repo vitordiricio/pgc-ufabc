@@ -131,28 +131,34 @@ class Cruzamento:
         return novos_veiculos
 
     def _calcular_posicao_inicial(self, direcao: Direcao) -> Tuple[float, float]:
-        """Calcula a posição inicial para um veículo - MÃO ÚNICA, sem escolha de faixa."""
+        """Calcula a posição inicial para um veículo - MÃO ÚNICA, com escolha de faixa."""
         if direcao == Direcao.NORTE:
-            # Spawn no topo, vai para baixo
-            return (self.centro_x, -50)
+            # Spawn no topo, vai para baixo - escolhe faixa aleatória
+            faixa = random.randint(0, CONFIG.NUMERO_FAIXAS - 1)
+            offset_x = (faixa - (CONFIG.NUMERO_FAIXAS - 1) / 2) * CONFIG.LARGURA_FAIXA
+            return (self.centro_x + offset_x, -50)
         elif direcao == Direcao.LESTE:
-            # Spawn na esquerda, vai para direita
-            return (-50, self.centro_y)
+            # Spawn na esquerda, vai para direita - escolhe faixa aleatória
+            faixa = random.randint(0, CONFIG.NUMERO_FAIXAS - 1)
+            offset_y = (faixa - (CONFIG.NUMERO_FAIXAS - 1) / 2) * CONFIG.LARGURA_FAIXA
+            return (-50, self.centro_y + offset_y)
         else:
             # Não deveria chegar aqui com mão única
             return (0, 0)
 
     def _tem_espaco_para_gerar(self, direcao: Direcao, posicao: Tuple[float, float]) -> bool:
-        """Verifica se há espaço suficiente para gerar um novo veículo."""
+        """Verifica se há espaço suficiente para gerar um novo veículo na mesma faixa."""
         for veiculo in self.veiculos_por_direcao.get(direcao, []):
             dx = abs(veiculo.posicao[0] - posicao[0])
             dy = abs(veiculo.posicao[1] - posicao[1])
 
             if direcao == Direcao.NORTE:
-                if dy < CONFIG.DISTANCIA_MIN_VEICULO * 2:
+                # Verifica se está na mesma faixa (mesmo X) e muito próximo
+                if abs(dx) < CONFIG.LARGURA_FAIXA / 2 and dy < CONFIG.DISTANCIA_MIN_VEICULO * 2:
                     return False
             elif direcao == Direcao.LESTE:
-                if dx < CONFIG.DISTANCIA_MIN_VEICULO * 2:
+                # Verifica se está na mesma faixa (mesmo Y) e muito próximo
+                if abs(dy) < CONFIG.LARGURA_FAIXA / 2 and dx < CONFIG.DISTANCIA_MIN_VEICULO * 2:
                     return False
 
         return True
@@ -567,7 +573,7 @@ class MalhaViaria:
             veiculo.desenhar(tela)
 
     def _desenhar_ruas(self, tela: pygame.Surface) -> None:
-        """Desenha as ruas da malha com mão única (e overlay opcional do CAOS)."""
+        """Desenha as ruas da malha com mão única e 2 faixas (e overlay opcional do CAOS)."""
         # Desenha ruas horizontais (Leste→Oeste)
         for linha in range(self.linhas):
             y = CONFIG.POSICAO_INICIAL_Y + linha * CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS
@@ -580,13 +586,16 @@ class MalhaViaria:
             # Desenha indicadores de direção
             self._desenhar_setas_horizontais(tela, y, Direcao.LESTE)
 
-            # Bordas da rua (sem linha central)
+            # Bordas da rua
             pygame.draw.line(tela, CONFIG.BRANCO,
                            (0, y - CONFIG.LARGURA_RUA // 2),
                            (CONFIG.LARGURA_TELA, y - CONFIG.LARGURA_RUA // 2), 2)
             pygame.draw.line(tela, CONFIG.BRANCO,
                            (0, y + CONFIG.LARGURA_RUA // 2),
                            (CONFIG.LARGURA_TELA, y + CONFIG.LARGURA_RUA // 2), 2)
+            
+            # Desenha linha divisória das faixas (tracejada)
+            self._desenhar_linha_divisoria_horizontal(tela, y)
 
             # Overlay do "caos" (opcional)
             if CONFIG.CHAOS_MOSTRAR:
@@ -619,13 +628,16 @@ class MalhaViaria:
             # Desenha indicadores de direção
             self._desenhar_setas_verticais(tela, x, Direcao.NORTE)
 
-            # Bordas da rua (sem linha central)
+            # Bordas da rua
             pygame.draw.line(tela, CONFIG.BRANCO,
                            (x - CONFIG.LARGURA_RUA // 2, 0),
                            (x - CONFIG.LARGURA_RUA // 2, CONFIG.ALTURA_TELA), 2)
             pygame.draw.line(tela, CONFIG.BRANCO,
                            (x + CONFIG.LARGURA_RUA // 2, 0),
                            (x + CONFIG.LARGURA_RUA // 2, CONFIG.ALTURA_TELA), 2)
+            
+            # Desenha linha divisória das faixas (tracejada)
+            self._desenhar_linha_divisoria_vertical(tela, x)
 
             # Overlay do "caos" (opcional)
             if CONFIG.CHAOS_MOSTRAR:
@@ -698,3 +710,31 @@ class MalhaViaria:
                     (x, y)
                 ]
                 pygame.draw.polygon(tela, CONFIG.AMARELO, pontos)
+    
+    def _desenhar_linha_divisoria_horizontal(self, tela: pygame.Surface, y: float) -> None:
+        """Desenha linha divisória tracejada entre as faixas horizontais."""
+        # Linha central da rua (onde fica a divisória)
+        x_inicio = 0
+        x_fim = CONFIG.LARGURA_TELA
+        comprimento_traco = 20
+        espaco_traco = 10
+        
+        x = x_inicio
+        while x < x_fim:
+            # Desenha traço
+            pygame.draw.line(tela, CONFIG.BRANCO, (x, y), (x + comprimento_traco, y), 2)
+            x += comprimento_traco + espaco_traco
+    
+    def _desenhar_linha_divisoria_vertical(self, tela: pygame.Surface, x: float) -> None:
+        """Desenha linha divisória tracejada entre as faixas verticais."""
+        # Linha central da rua (onde fica a divisória)
+        y_inicio = 0
+        y_fim = CONFIG.ALTURA_TELA
+        comprimento_traco = 20
+        espaco_traco = 10
+        
+        y = y_inicio
+        while y < y_fim:
+            # Desenha traço
+            pygame.draw.line(tela, CONFIG.BRANCO, (x, y), (x, y + comprimento_traco), 2)
+            y += comprimento_traco + espaco_traco

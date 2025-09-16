@@ -106,7 +106,7 @@ class GerenciadorMetricas:
             'configuracoes': {
                 'grade': f"{CONFIG.LINHAS_GRADE}x{CONFIG.COLUNAS_GRADE}",
                 'taxa_geracao': CONFIG.TAXA_GERACAO_VEICULO,
-                'velocidade_max': CONFIG.VELOCIDADE_MAX_VEICULO
+                'velocidade_max': CONFIG.VELOCIDADE_MAX_GLOBAL
             }
         }
         

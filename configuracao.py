@@ -68,9 +68,10 @@ class Configuracao:
         (255, 20, 147)    # Rosa
     ])
     
-    # Configurações da rua - AGORA MÃO ÚNICA
-    LARGURA_RUA: int = 40  # Reduzida pois só tem uma direção
-    LARGURA_FAIXA: int = 40  # Uma única faixa por direção
+    # Configurações da rua - AGORA MÃO ÚNICA COM 2 FAIXAS
+    LARGURA_RUA: int = 80  # Aumentada para 2 faixas por direção
+    LARGURA_FAIXA: int = 40  # Largura de cada faixa individual
+    NUMERO_FAIXAS: int = 2  # Número de faixas por direção
 
     # =======================
     # Efeito "Caos" nas ruas
@@ -102,9 +103,15 @@ class Configuracao:
     LARGURA_VEICULO: int = 25
     ALTURA_VEICULO: int = 35
     TAXA_GERACAO_VEICULO: float = 0.01  # Aumentada um pouco já que temos menos pontos de spawn
-    VELOCIDADE_VEICULO: float = 0.5
-    VELOCIDADE_MAX_VEICULO: float = 1.0
-    VELOCIDADE_MIN_VEICULO: float = 0.0
+    
+    # Velocidades - Sistema com variação individual
+    VELOCIDADE_BASE: float = 0.5  # Velocidade base de referência
+    VELOCIDADE_MAX_GLOBAL: float = 1.0  # Velocidade máxima global (limite da via)
+    VELOCIDADE_MIN_INDIVIDUAL: float = 0.3  # Velocidade mínima individual
+    VELOCIDADE_MAX_INDIVIDUAL: float = 0.9  # Velocidade máxima individual (deve ser < VELOCIDADE_MAX_GLOBAL)
+    VELOCIDADE_MIN_VEICULO: float = 0.0  # Velocidade mínima absoluta (parado)
+    
+    # Configurações de física
     ACELERACAO_VEICULO: float = 0.15
     DESACELERACAO_VEICULO: float = 0.25
     DESACELERACAO_EMERGENCIA: float = 0.5

@@ -1,8 +1,10 @@
 """
 Módulo de física de veículos para a simulação de tráfego.
 Contém a lógica de movimento, aceleração e física dos veículos.
+Otimizado com numpy para melhor performance.
 """
 import math
+import numpy as np
 from typing import Tuple, List, Optional
 from configuracao import CONFIG, Direcao
 from utils import calcular_desaceleracao_necessaria, obter_direcao_movimento, calcular_posicao_futura
@@ -54,6 +56,7 @@ class FisicaVeiculo:
     def mover_veiculo(self, dt: float) -> Tuple[float, float]:
         """
         Move o veículo baseado na velocidade atual.
+        Otimizado com numpy para melhor performance.
         
         Args:
             dt: Delta time
@@ -61,15 +64,23 @@ class FisicaVeiculo:
         Returns:
             Tupla (dx, dy) representando o movimento aplicado
         """
-        dx, dy = obter_direcao_movimento(self.veiculo.direcao)
-        dx *= self.velocidade
-        dy *= self.velocidade
+        # Usa numpy para cálculos vetoriais mais eficientes
+        direcao_vec = np.array(obter_direcao_movimento(self.veiculo.direcao))
+        movimento = direcao_vec * self.velocidade
         
-        self.veiculo.posicao[0] += dx
-        self.veiculo.posicao[1] += dy
-        self.veiculo.metricas.adicionar_distancia_percorrida(math.sqrt(dx ** 2 + dy ** 2))
+        # Atualiza posição usando numpy
+        pos_atual = np.array(self.veiculo.posicao)
+        nova_pos = pos_atual + movimento
         
-        return (dx, dy)
+        # Atualiza posição do veículo
+        self.veiculo.posicao[0] = nova_pos[0]
+        self.veiculo.posicao[1] = nova_pos[1]
+        
+        # Calcula distância percorrida usando norma euclidiana
+        distancia = np.linalg.norm(movimento)
+        self.veiculo.metricas.adicionar_distancia_percorrida(distancia)
+        
+        return tuple(movimento)
     
     def aplicar_frenagem_para_parada(self, distancia: float) -> None:
         """

@@ -1,10 +1,12 @@
 """
 Sistema de detecção e prevenção de colisões para veículos.
+Otimizado com numpy e processamento em lote para melhor performance.
 """
 import pygame
+import numpy as np
 from typing import List, Tuple, Optional
 from configuracao import CONFIG, Direcao
-from utils import calcular_distancia_entre_veiculos, mesma_via, calcular_velocidade_segura
+from utils import calcular_distancia_entre_veiculos, mesma_via, calcular_velocidade_segura, encontrar_veiculos_frente_batch
 
 
 class SistemaColisao:
@@ -79,6 +81,59 @@ class SistemaColisao:
     def processar_todos_veiculos(self, todos_veiculos: List) -> None:
         """
         Processa interação com todos os veículos, não apenas os do cruzamento atual.
+        Otimizado com processamento em lote para melhor performance.
+        
+        Args:
+            todos_veiculos: Lista de todos os veículos na simulação
+        """
+        if not todos_veiculos or len(todos_veiculos) < 2:
+            self.veiculo_frente = None
+            self.distancia_veiculo_frente = float('inf')
+            if not self.veiculo.aguardando_semaforo:
+                self.veiculo.fisica.acelerar_normalmente()
+            return
+        
+        # Filtra apenas veículos ativos da mesma direção
+        veiculos_ativos = [v for v in todos_veiculos if v.ativo and v.direcao == self.veiculo.direcao]
+        
+        if len(veiculos_ativos) < 2:
+            self.veiculo_frente = None
+            self.distancia_veiculo_frente = float('inf')
+            if not self.veiculo.aguardando_semaforo:
+                self.veiculo.fisica.acelerar_normalmente()
+            return
+        
+        # Encontra o índice do veículo atual
+        try:
+            idx_atual = next(i for i, v in enumerate(veiculos_ativos) if v.id == self.veiculo.id)
+        except StopIteration:
+            # Veículo não encontrado na lista, usa método antigo como fallback
+            self._processar_todos_veiculos_fallback(todos_veiculos)
+            return
+        
+        # Prepara dados para processamento em lote
+        posicoes = np.array([v.posicao for v in veiculos_ativos])
+        direcoes = np.array([v.direcao for v in veiculos_ativos])
+        tolerancia = CONFIG.LARGURA_FAIXA * 0.8
+        
+        # Encontra veículos à frente usando processamento em lote
+        indices_frente, distancias_frente = encontrar_veiculos_frente_batch(posicoes, direcoes, tolerancia)
+        
+        # Processa resultado para o veículo atual
+        if indices_frente[idx_atual] != -1:
+            idx_frente = indices_frente[idx_atual]
+            self.veiculo_frente = veiculos_ativos[idx_frente]
+            self.distancia_veiculo_frente = distancias_frente[idx_atual]
+            self.processar_veiculo_frente(self.veiculo_frente)
+        else:
+            self.veiculo_frente = None
+            self.distancia_veiculo_frente = float('inf')
+            if not self.veiculo.aguardando_semaforo:
+                self.veiculo.fisica.acelerar_normalmente()
+    
+    def _processar_todos_veiculos_fallback(self, todos_veiculos: List) -> None:
+        """
+        Método de fallback para processamento individual quando o processamento em lote falha.
         
         Args:
             todos_veiculos: Lista de todos os veículos na simulação

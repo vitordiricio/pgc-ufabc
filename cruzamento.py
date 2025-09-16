@@ -174,10 +174,10 @@ class Cruzamento:
             ID do cruzamento mais próximo
         """
         # Calcula em qual cruzamento o veículo está baseado em sua posição
-        coluna = int((veiculo.posicao[0] - CONFIG.POSICAO_INICIAL_X + CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS / 2) /
-                    CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS)
-        linha = int((veiculo.posicao[1] - CONFIG.POSICAO_INICIAL_Y + CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS / 2) /
-                   CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS)
+        coluna = int((veiculo.posicao[0] - CONFIG.POSICAO_INICIAL_X + CONFIG.ESPACAMENTO_HORIZONTAL / 2) /
+                    CONFIG.ESPACAMENTO_HORIZONTAL)
+        linha = int((veiculo.posicao[1] - CONFIG.POSICAO_INICIAL_Y + CONFIG.ESPACAMENTO_VERTICAL / 2) /
+                   CONFIG.ESPACAMENTO_VERTICAL)
 
         # Limita aos valores válidos
         coluna = max(0, min(coluna, CONFIG.COLUNAS_GRADE - 1))
@@ -267,7 +267,7 @@ class Cruzamento:
 
     def _veiculo_proximo_ao_cruzamento(self, veiculo: Veiculo) -> bool:
         """Verifica se um veículo está próximo o suficiente do cruzamento."""
-        distancia_limite = CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS * 0.7
+        distancia_limite = (CONFIG.ESPACAMENTO_HORIZONTAL + CONFIG.ESPACAMENTO_VERTICAL) / 2 * 0.7
 
         dx = abs(veiculo.posicao[0] - self.centro_x)
         dy = abs(veiculo.posicao[1] - self.centro_y)
@@ -429,7 +429,7 @@ class MalhaViaria:
             # via horizontal: achar linha (índice da rua horizontal) e o segmento X
             linha_mais_prox = max(0, min(
                 self.linhas - 1,
-                round((veiculo.posicao[1] - CONFIG.POSICAO_INICIAL_Y) / CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS)
+                round((veiculo.posicao[1] - CONFIG.POSICAO_INICIAL_Y) / CONFIG.ESPACAMENTO_VERTICAL)
             ))
             seg_x = max(0, min(self._caos_seg_h - 1, int(veiculo.posicao[0] // seg)))
             return self.caos_horizontal[linha_mais_prox][seg_x]
@@ -438,7 +438,7 @@ class MalhaViaria:
             # via vertical: achar coluna (índice da rua vertical) e o segmento Y
             coluna_mais_prox = max(0, min(
                 self.colunas - 1,
-                round((veiculo.posicao[0] - CONFIG.POSICAO_INICIAL_X) / CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS)
+                round((veiculo.posicao[0] - CONFIG.POSICAO_INICIAL_X) / CONFIG.ESPACAMENTO_HORIZONTAL)
             ))
             seg_y = max(0, min(self._caos_seg_v - 1, int(veiculo.posicao[1] // seg)))
             return self.caos_vertical[coluna_mais_prox][seg_y]
@@ -449,8 +449,8 @@ class MalhaViaria:
         """Cria a grade de cruzamentos."""
         for linha in range(self.linhas):
             for coluna in range(self.colunas):
-                x = CONFIG.POSICAO_INICIAL_X + coluna * CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS
-                y = CONFIG.POSICAO_INICIAL_Y + linha * CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS
+                x = CONFIG.POSICAO_INICIAL_X + coluna * CONFIG.ESPACAMENTO_HORIZONTAL
+                y = CONFIG.POSICAO_INICIAL_Y + linha * CONFIG.ESPACAMENTO_VERTICAL
 
                 id_cruzamento = (linha, coluna)
                 self.cruzamentos[id_cruzamento] = Cruzamento(
@@ -508,11 +508,11 @@ class MalhaViaria:
         for veiculo in self.veiculos:
             if veiculo.direcao == Direcao.NORTE:
                 # Via vertical - agrupa por X
-                via_x = round(veiculo.posicao[0] / CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS)
+                via_x = round(veiculo.posicao[0] / CONFIG.ESPACAMENTO_HORIZONTAL)
                 chave = (Direcao.NORTE, via_x)
             elif veiculo.direcao == Direcao.LESTE:
                 # Via horizontal - agrupa por Y
-                via_y = round(veiculo.posicao[1] / CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS)
+                via_y = round(veiculo.posicao[1] / CONFIG.ESPACAMENTO_VERTICAL)
                 chave = (Direcao.LESTE, via_y)
             else:
                 continue
@@ -576,7 +576,7 @@ class MalhaViaria:
         """Desenha as ruas da malha com mão única e 2 faixas (e overlay opcional do CAOS)."""
         # Desenha ruas horizontais (Leste→Oeste)
         for linha in range(self.linhas):
-            y = CONFIG.POSICAO_INICIAL_Y + linha * CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS
+            y = CONFIG.POSICAO_INICIAL_Y + linha * CONFIG.ESPACAMENTO_VERTICAL
 
             # Fundo da rua
             pygame.draw.rect(tela, CONFIG.CINZA_ESCURO,
@@ -618,7 +618,7 @@ class MalhaViaria:
 
         # Desenha ruas verticais (Norte→Sul)
         for coluna in range(self.colunas):
-            x = CONFIG.POSICAO_INICIAL_X + coluna * CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS
+            x = CONFIG.POSICAO_INICIAL_X + coluna * CONFIG.ESPACAMENTO_HORIZONTAL
 
             # Fundo da rua
             pygame.draw.rect(tela, CONFIG.CINZA_ESCURO,
@@ -670,7 +670,7 @@ class MalhaViaria:
             # Evita desenhar setas nos cruzamentos
             perto_de_cruzamento = False
             for coluna in range(self.colunas):
-                x_cruzamento = CONFIG.POSICAO_INICIAL_X + coluna * CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS
+                x_cruzamento = CONFIG.POSICAO_INICIAL_X + coluna * CONFIG.ESPACAMENTO_HORIZONTAL
                 if abs(x - x_cruzamento) < CONFIG.LARGURA_RUA:
                     perto_de_cruzamento = True
                     break
@@ -697,7 +697,7 @@ class MalhaViaria:
             # Evita desenhar setas nos cruzamentos
             perto_de_cruzamento = False
             for linha in range(self.linhas):
-                y_cruzamento = CONFIG.POSICAO_INICIAL_Y + linha * CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS
+                y_cruzamento = CONFIG.POSICAO_INICIAL_Y + linha * CONFIG.ESPACAMENTO_VERTICAL
                 if abs(y - y_cruzamento) < CONFIG.LARGURA_RUA:
                     perto_de_cruzamento = True
                     break

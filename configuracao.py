@@ -68,9 +68,10 @@ class Configuracao:
         (255, 20, 147)    # Rosa
     ])
     
-    # Configurações da rua - AGORA MÃO ÚNICA
-    LARGURA_RUA: int = 40  # Reduzida pois só tem uma direção
-    LARGURA_FAIXA: int = 40  # Uma única faixa por direção
+    # Configurações da rua - MÚLTIPLAS FAIXAS
+    LARGURA_RUA: int = 80  # Aumentada para múltiplas faixas
+    LARGURA_FAIXA: int = 20  # Largura de cada faixa
+    NUM_FAIXAS: int = 3  # Número de faixas por direção
 
     # =======================
     # Efeito "Caos" nas ruas
@@ -138,6 +139,88 @@ class Configuracao:
     DISTANCIA_DETECCAO_SEMAFORO: int = 120
     DISTANCIA_PARADA_SEMAFORO: int = 15
     
+    # =======================
+    # Sistema de Rotas e OD
+    # =======================
+    ALGORITMO_PATHFINDING: str = "dijkstra"  # "dijkstra" ou "a_star"
+    PROBABILIDADE_MUDANCA_ROTA: float = 0.1  # Probabilidade de recalcular rota por frame
+    DISTANCIA_MIN_RECALCULO: float = 50.0    # Distância mínima para recalcular rota
+    
+    # =======================
+    # Sistema de Segurança (Anticolisão)
+    # =======================
+    # Configurações de frenagem
+    ACELERACAO_MAX_FREIO: float = 2.0        # Aceleração máxima de frenagem (m/s²)
+    MARGEM_SEGURANCA_FREIO: float = 5.0      # Margem adicional para frenagem (pixels)
+    TTC_LIMIAR_CRITICO: float = 2.0          # Tempo para colisão crítico (segundos)
+    TTC_LIMIAR_ALERTA: float = 4.0           # Tempo para colisão alerta (segundos)
+    
+    # Configurações de reserva de interseção
+    DT_RESERVA: float = 0.3                  # Timeslice de reserva (segundos)
+    TAMANHO_ZONA_CONFLITO: float = 20.0      # Tamanho da zona de conflito (pixels)
+    TEMPO_MAX_RESERVA: float = 5.0           # Tempo máximo de reserva (segundos)
+    
+    # Configurações de bounding box
+    TOLERANCIA_OVERLAP: float = 2.0          # Tolerância para overlap de bounding boxes
+    VERIFICACAO_COLISAO_FREQUENTE: bool = True  # Verificação de colisão a cada frame
+    
+    # =======================
+    # Sistema de Mudança de Faixa (IDM + MOBIL)
+    # =======================
+    # Estados de mudança de faixa
+    ESTADO_FAIXA_KEEP: str = "KeepLane"
+    ESTADO_FAIXA_LEFT: str = "LaneChangeLeft"
+    ESTADO_FAIXA_RIGHT: str = "LaneChangeRight"
+    
+    # Parâmetros IDM (Intelligent Driver Model)
+    IDM_V0: float = 1.0                      # Velocidade desejada (m/s)
+    IDM_T: float = 1.5                       # Tempo de reação (s)
+    IDM_A: float = 0.3                       # Aceleração máxima (m/s²)
+    IDM_B: float = 0.5                       # Desaceleração confortável (m/s²)
+    IDM_S0: float = 2.0                      # Distância mínima (m)
+    IDM_DELTA: float = 4.0                   # Expoente de aceleração
+    IDM_S1: float = 0.0                      # Distância de interação (m)
+    
+    # Parâmetros MOBIL (Minimizing Overall Braking Induced by Lane changes)
+    MOBIL_P: float = 0.1                     # Politeness factor
+    MOBIL_A_THRESHOLD: float = 0.2           # Ganho mínimo de aceleração
+    MOBIL_A_BACK_MIN: float = -0.3           # Desaceleração máxima do seguidor
+    
+    # Checagens de segurança
+    D_MIN: float = 5.0                       # Distância mínima para troca (m)
+    D_B: float = 3.0                         # Distância de frenagem (m)
+    TTC_MIN: float = 2.0                     # TTC mínimo para troca (s)
+    TTC_ABORT: float = 1.0                   # TTC para abortar troca (s)
+    DT_PRED: float = 2.0                     # Tempo de predição (s)
+    
+    # Interpolação lateral
+    FRAMES_TROCA_FAIXA: int = 30             # Frames para completar troca
+    EASING_TROCA: str = "ease_in_out"        # Tipo de easing
+    
+    # Zona de interseção
+    ZONA_INTERSECAO: float = 20.0            # Distância antes do cruzamento (m)
+
+    # =======================
+    # Sistema de Gerenciamento de Interseções
+    # =======================
+    # Reservas de interseção
+    DT_RESERVA: float = 3.0                  # Duração padrão da reserva (s)
+    MARGEM_SEGURANCA: float = 0.5            # Margem de segurança (m)
+    TEMPO_ESPERA_MAX: float = 30.0           # Tempo máximo de espera (s)
+
+    # Prioridades de veículos
+    PRIORIDADE_NORMAL: int = 0               # Prioridade normal
+    PRIORIDADE_ONIBUS: int = 1               # Prioridade de ônibus
+    PRIORIDADE_EMERGENCIA: int = 2           # Prioridade de emergência
+
+    # Visualização de debug
+    MOSTRAR_DEBUG_INTERSECAO: bool = True    # Mostrar zonas de conflito e reservas
+
+    # Tipos de veículo
+    TIPO_VEICULO_CARRO: str = "carro"
+    TIPO_VEICULO_ONIBUS: str = "onibus"
+    TIPO_VEICULO_CAMINHAO: str = "caminhao"
+
     # Configurações visuais
     MOSTRAR_GRID: bool = True
     MOSTRAR_ESTATISTICAS: bool = True
@@ -146,20 +229,20 @@ class Configuracao:
     TAMANHO_FONTE_PEQUENA: int = 14
     TAMANHO_FONTE_MEDIA: int = 18
     TAMANHO_FONTE_GRANDE: int = 24
-    
+
     # Métricas de desempenho
     COLETAR_METRICAS: bool = True
     INTERVALO_METRICAS: int = 300  # 5 segundos
-    
+
     # Posição inicial da malha
     MARGEM_TELA: int = 100
-    
+
     @property
     def POSICAO_INICIAL_X(self) -> int:
         """Calcula a posição X inicial dinamicamente."""
         largura_total = (self.COLUNAS_GRADE - 1) * self.ESPACAMENTO_ENTRE_CRUZAMENTOS
         return (self.LARGURA_TELA - largura_total) // 2
-    
+
     @property
     def POSICAO_INICIAL_Y(self) -> int:
         """Calcula a posição Y inicial dinamicamente."""

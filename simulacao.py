@@ -230,6 +230,14 @@ class Simulacao:
         # Salvar relatório (Ctrl+S)
         elif evento.key == pygame.K_s and (evento.mod & pygame.KMOD_CTRL):
             self._salvar_relatorio()
+        
+        # Controles do sistema de rotas
+        elif evento.key == pygame.K_b:
+            self._simular_bloqueio_aresta()
+        elif evento.key == pygame.K_u:
+            self._desbloquear_todas_arestas()
+        elif evento.key == pygame.K_c:
+            self._mostrar_estatisticas_grafo()
     
     def _mudar_heuristica(self, nova_heuristica: TipoHeuristica) -> None:
         """Muda a heurística de controle."""
@@ -285,6 +293,35 @@ class Simulacao:
             self._mostrar_mensagem(f"Relatório salvo: {os.path.basename(caminho)}")
         except Exception as e:
             self._mostrar_mensagem(f"Erro ao salvar: {str(e)}")
+    
+    def _simular_bloqueio_aresta(self) -> None:
+        """Simula bloqueio de uma aresta aleatória."""
+        import random
+        
+        # Seleciona uma aresta aleatória para bloquear
+        arestas = self.malha.malha_pathfinding.arestas
+        if arestas:
+            aresta = random.choice(arestas)
+            self.malha.bloquear_aresta(aresta.origem, aresta.destino)
+            self._mostrar_mensagem(f"Aresta bloqueada: {aresta.origem} → {aresta.destino}")
+        else:
+            self._mostrar_mensagem("Nenhuma aresta disponível para bloquear")
+    
+    def _desbloquear_todas_arestas(self) -> None:
+        """Desbloqueia todas as arestas."""
+        arestas_bloqueadas = 0
+        for aresta in self.malha.malha_pathfinding.arestas:
+            if aresta.bloqueada:
+                self.malha.desbloquear_aresta(aresta.origem, aresta.destino)
+                arestas_bloqueadas += 1
+        
+        self._mostrar_mensagem(f"Desbloqueadas {arestas_bloqueadas} arestas")
+    
+    def _mostrar_estatisticas_grafo(self) -> None:
+        """Mostra estatísticas do grafo."""
+        stats = self.malha.malha_pathfinding.obter_estatisticas_grafo()
+        msg = f"Grafo: {stats['total_nos']} nós, {stats['total_arestas']} arestas, {stats['arestas_bloqueadas']} bloqueadas"
+        self._mostrar_mensagem(msg)
     
     def _finalizar_simulacao(self) -> None:
         """Finaliza a simulação e salva métricas."""
@@ -356,7 +393,11 @@ class Simulacao:
         clock = pygame.time.Clock()
         
         print("Simulação de Tráfego Urbano iniciada!")
-        print("Pressione F1 para ajuda com os controles.")
+        print("Controles:")
+        print("  ESC - Sair | SPACE - Pausar | R - Reiniciar")
+        print("  1-5 - Heurísticas | N - Avançar (Manual) | TAB - Estatísticas")
+        print("  +/- - Velocidade | B - Bloquear aresta | U - Desbloquear | C - Stats grafo")
+        print("  Ctrl+S - Salvar relatório")
         
         while self.rodando:
             dt = clock.tick(CONFIG.FPS) / 1000.0  # Delta time em segundos

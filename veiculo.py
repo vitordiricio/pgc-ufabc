@@ -8,6 +8,9 @@ from typing import Tuple, Optional, List
 import pygame
 from configuracao import CONFIG, Direcao, EstadoSemaforo
 from semaforo import Semaforo
+from malha_viaria import TipoMovimento, MalhaViaria
+from sistema_faixas import EstadoFaixa, TipoVeiculo, LaneManager, IDM, MOBIL, SafetyChecker
+from intersection_manager import IntersectionManager
 
 
 class Veiculo:
@@ -74,8 +77,588 @@ class Veiculo:
         self.paradas_totais = 0
         self.distancia_percorrida = 0.0
         
+        # Sistema de rotas
+        self.rota: List[Tuple[int, int]] = []  # Lista de IDs de cruzamentos da rota
+        self.proximo_no: Optional[Tuple[int, int]] = None  # Próximo nó da rota
+        self.proximo_movimento: TipoMovimento = TipoMovimento.RETA  # Próximo movimento
+        self.estado_reserva: bool = False  # Se tem reserva ativa na interseção
+        self.destino: Optional[Tuple[int, int]] = None  # Destino final
+        self.malha_viaria: Optional[MalhaViaria] = None  # Referência à malha
+        
+        # Sistema de mudança de faixa
+        self.estado_faixa: EstadoFaixa = EstadoFaixa.KEEP_LANE
+        self.faixa_atual: int = 0  # ID da faixa atual
+        self.faixa_alvo: Optional[int] = None  # ID da faixa alvo
+        self.tipo_veiculo: TipoVeiculo = TipoVeiculo.CARRO
+        self.lane_manager: Optional[LaneManager] = None  # Gerenciador de faixas
+        
+        # Controle de mudança de faixa
+        self.frames_troca: int = 0  # Frames restantes para completar troca
+        self.posicao_lateral_inicial: float = 0.0  # Posição lateral inicial da troca
+        self.posicao_lateral_final: float = 0.0  # Posição lateral final da troca
+        self.velocidade_lateral: float = 0.0  # Velocidade lateral atual
+        
+        # Predição de trajetória
+        self.trajetoria_predita: List[Tuple[float, float]] = []  # Trajetória predita
+        self.tempo_predicao: float = 0.0  # Tempo de predição atual
+        
+        # Sistema de reservas de interseção
+        self.intersection_manager: Optional[IntersectionManager] = None  # Gerenciador de interseção
+        self.reserva_ativa: bool = False  # Se tem reserva ativa
+        self.tempo_espera_intersecao: float = 0.0  # Tempo esperando na interseção
+        self.prioridade: int = CONFIG.PRIORIDADE_NORMAL  # Prioridade do veículo
+        
+        # Controle de segurança
+        self.velocidade_alvo = CONFIG.VELOCIDADE_VEICULO
+        self.ttc_lider = float('inf')  # Tempo para colisão com líder
+        self.distancia_frenagem_segura = 0.0
+        
         # Retângulo de colisão
         self._atualizar_rect()
+    
+    def definir_rota(self, rota: List[Tuple[int, int]], malha_viaria: MalhaViaria):
+        """
+        Define uma rota para o veículo.
+        
+        Args:
+            rota: Lista de IDs de cruzamentos da rota
+            malha_viaria: Referência à malha viária
+        """
+        self.rota = rota.copy()
+        self.malha_viaria = malha_viaria
+        self.destino = rota[-1] if rota else None
+        self._atualizar_proximo_no()
+    
+    def _atualizar_proximo_no(self):
+        """Atualiza o próximo nó da rota."""
+        if not self.rota:
+            self.proximo_no = None
+            return
+        
+        # Encontra o próximo nó na rota
+        for i, no in enumerate(self.rota):
+            if no == self.id_cruzamento_atual:
+                if i + 1 < len(self.rota):
+                    self.proximo_no = self.rota[i + 1]
+                else:
+                    self.proximo_no = None
+                break
+    
+    def recalcular_rota(self) -> bool:
+        """
+        Recalcula a rota do veículo.
+        
+        Returns:
+            True se a rota foi recalculada com sucesso
+        """
+        if not self.malha_viaria or not self.destino:
+            return False
+        
+        nova_rota = self.malha_viaria.calcular_rota(
+            self.id_cruzamento_atual, 
+            self.destino, 
+            CONFIG.ALGORITMO_PATHFINDING
+        )
+        
+        if nova_rota:
+            self.rota = nova_rota
+            self._atualizar_proximo_no()
+            return True
+        
+        return False
+    
+    def verificar_necessidade_recalculo(self) -> bool:
+        """
+        Verifica se é necessário recalcular a rota.
+        
+        Returns:
+            True se deve recalcular
+        """
+        if not self.rota or not self.malha_viaria:
+            return False
+        
+        # Recalcula com probabilidade configurada
+        if random.random() < CONFIG.PROBABILIDADE_MUDANCA_ROTA:
+            return True
+        
+        # Verifica se a rota atual está bloqueada
+        for i in range(len(self.rota) - 1):
+            origem = self.rota[i]
+            destino = self.rota[i + 1]
+            
+            # Verifica se a aresta está bloqueada
+            for aresta in self.malha_viaria.arestas:
+                if aresta.origem == origem and aresta.destino == destino and aresta.bloqueada:
+                    return True
+        
+        return False
+    
+    def calcular_distancia_frenagem_segura(self) -> float:
+        """
+        Calcula a distância de frenagem segura.
+        
+        Returns:
+            Distância de frenagem segura em pixels
+        """
+        if self.velocidade <= 0:
+            return 0.0
+        
+        # Fórmula: d = v²/(2*a) + margem
+        distancia_fisica = (self.velocidade ** 2) / (2 * CONFIG.ACELERACAO_MAX_FREIO)
+        return distancia_fisica + CONFIG.MARGEM_SEGURANCA_FREIO
+    
+    def calcular_ttc_lider(self, veiculo_lider: 'Veiculo') -> float:
+        """
+        Calcula o tempo para colisão com o veículo líder.
+        
+        Args:
+            veiculo_lider: Veículo à frente
+            
+        Returns:
+            Tempo para colisão em segundos
+        """
+        if not veiculo_lider or self.velocidade <= veiculo_lider.velocidade:
+            return float('inf')
+        
+        distancia = self._calcular_distancia_para_veiculo(veiculo_lider)
+        velocidade_relativa = self.velocidade - veiculo_lider.velocidade
+        
+        if velocidade_relativa <= 0:
+            return float('inf')
+        
+        return distancia / velocidade_relativa
+    
+    def aplicar_controle_seguranca(self, todos_veiculos: List['Veiculo']) -> None:
+        """
+        Aplica controle de segurança baseado em TTC e distância de frenagem.
+        
+        Args:
+            todos_veiculos: Lista de todos os veículos
+        """
+        # Calcula distância de frenagem segura
+        self.distancia_frenagem_segura = self.calcular_distancia_frenagem_segura()
+        
+        # Atualiza TTC com líder
+        if self.veiculo_frente:
+            self.ttc_lider = self.calcular_ttc_lider(self.veiculo_frente)
+            
+            # Aplica controle baseado em TTC
+            if self.ttc_lider < CONFIG.TTC_LIMIAR_CRITICO:
+                # Situação crítica: para imediatamente
+                self.velocidade_alvo = 0.0
+                self.aceleracao_atual = -CONFIG.DESACELERACAO_EMERGENCIA
+            elif self.ttc_lider < CONFIG.TTC_LIMIAR_ALERTA:
+                # Situação de alerta: reduz velocidade
+                self.velocidade_alvo = self.veiculo_frente.velocidade * 0.8
+                if self.velocidade > self.velocidade_alvo:
+                    self.aceleracao_atual = -CONFIG.DESACELERACAO_VEICULO
+            else:
+                # Situação normal: mantém velocidade desejada
+                self.velocidade_alvo = CONFIG.VELOCIDADE_VEICULO
+        else:
+            # Sem veículo à frente: velocidade normal
+            self.velocidade_alvo = CONFIG.VELOCIDADE_VEICULO
+            self.ttc_lider = float('inf')
+    
+    def solicitar_reserva_intersecao(self, cruzamento) -> bool:
+        """
+        Solicita reserva de interseção no cruzamento.
+        
+        Args:
+            cruzamento: Cruzamento onde solicitar reserva
+            
+        Returns:
+            True se a reserva foi concedida
+        """
+        if not cruzamento or self.estado_reserva:
+            return False
+        
+        # Calcula bounding box da trajetória
+        bbox_trajetoria = self._calcular_bbox_trajetoria()
+        
+        # Solicita reserva
+        reserva_concedida = cruzamento.solicitar_reserva_intersecao(
+            self.id, self.proximo_movimento, self.direcao, bbox_trajetoria
+        )
+        
+        if reserva_concedida:
+            self.estado_reserva = True
+        
+        return reserva_concedida
+    
+    def liberar_reserva_intersecao(self, cruzamento):
+        """
+        Libera reserva de interseção no cruzamento.
+        
+        Args:
+            cruzamento: Cruzamento onde liberar reserva
+        """
+        if cruzamento and self.estado_reserva:
+            cruzamento.liberar_reserva_intersecao(self.id)
+            self.estado_reserva = False
+    
+    def _calcular_bbox_trajetoria(self) -> pygame.Rect:
+        """
+        Calcula bounding box da trajetória do veículo.
+        
+        Returns:
+            Retângulo da trajetória
+        """
+        # Simplificado: usa o retângulo atual do veículo
+        # Em uma implementação completa, projetaria a trajetória futura
+        return self.rect.copy()
+    
+    def definir_lane_manager(self, lane_manager: LaneManager):
+        """
+        Define o gerenciador de faixas para o veículo.
+        
+        Args:
+            lane_manager: Gerenciador de faixas
+        """
+        self.lane_manager = lane_manager
+        # Atribui veículo à faixa inicial
+        if lane_manager:
+            faixa_inicial = lane_manager.obter_faixa_aleatoria()
+            lane_manager.atribuir_veiculo_faixa(self, faixa_inicial)
+            self.faixa_atual = faixa_inicial
+    
+    def definir_intersection_manager(self, intersection_manager: IntersectionManager):
+        """
+        Define o gerenciador de interseção para o veículo.
+        
+        Args:
+            intersection_manager: Gerenciador de interseção
+        """
+        self.intersection_manager = intersection_manager
+    
+    def atualizar_mudanca_faixa(self) -> None:
+        """Atualiza o processo de mudança de faixa."""
+        if self.estado_faixa == EstadoFaixa.KEEP_LANE:
+            self._avaliar_mudanca_faixa()
+        elif self.estado_faixa in [EstadoFaixa.LANE_CHANGE_LEFT, EstadoFaixa.LANE_CHANGE_RIGHT]:
+            self._executar_mudanca_faixa()
+    
+    def _avaliar_mudanca_faixa(self) -> None:
+        """Avalia se deve mudar de faixa."""
+        if not self.lane_manager:
+            return
+        
+        # Verifica se está próximo de interseção
+        if self._proximo_de_intersecao():
+            return
+        
+        # Obtém faixa atual
+        faixa_atual = self.lane_manager.obter_faixa_veiculo(self)
+        if not faixa_atual:
+            return
+        
+        # Obtém faixas vizinhas
+        esquerda_id, direita_id = self.lane_manager.obter_faixas_vizinhas(faixa_atual.id)
+        
+        # Avalia mudança de faixa se há múltiplos veículos na faixa atual
+        if len(faixa_atual.veiculos) > 1:
+            # Avalia mudança para esquerda
+            if esquerda_id is not None:
+                faixa_esquerda = self.lane_manager.faixas[esquerda_id]
+                if self._deve_mudar_para_faixa(faixa_esquerda):
+                    self._iniciar_mudanca_faixa(esquerda_id, EstadoFaixa.LANE_CHANGE_LEFT)
+                    return
+            
+            # Avalia mudança para direita
+            if direita_id is not None:
+                faixa_direita = self.lane_manager.faixas[direita_id]
+                if self._deve_mudar_para_faixa(faixa_direita):
+                    self._iniciar_mudanca_faixa(direita_id, EstadoFaixa.LANE_CHANGE_RIGHT)
+                    return
+    
+    def _deve_mudar_para_faixa(self, faixa_alvo) -> bool:
+        """Verifica se deve mudar para uma faixa específica."""
+        if not self.lane_manager:
+            return False
+        
+        faixa_atual = self.lane_manager.obter_faixa_veiculo(self)
+        if not faixa_atual:
+            return False
+        
+        # Verifica segurança
+        if not SafetyChecker.verificar_seguranca_troca(self, faixa_alvo, self.lane_manager):
+            return False
+        
+        # Aplica MOBIL
+        return MOBIL.deve_mudar_faixa(self, faixa_atual, faixa_alvo, self.lane_manager)
+    
+    def _iniciar_mudanca_faixa(self, faixa_alvo_id: int, estado: EstadoFaixa):
+        """Inicia o processo de mudança de faixa."""
+        self.estado_faixa = estado
+        self.faixa_alvo = faixa_alvo_id
+        self.frames_troca = CONFIG.FRAMES_TROCA_FAIXA
+        
+        # Calcula posições inicial e final
+        if self.lane_manager:
+            faixa_atual = self.lane_manager.faixas[self.faixa_atual]
+            faixa_alvo = self.lane_manager.faixas[faixa_alvo_id]
+            
+            self.posicao_lateral_inicial = faixa_atual.posicao_central
+            self.posicao_lateral_final = faixa_alvo.posicao_central
+    
+    def _executar_mudanca_faixa(self) -> None:
+        """Executa a mudança de faixa."""
+        if self.frames_troca <= 0:
+            self._finalizar_mudanca_faixa()
+            return
+        
+        # Verifica se deve abortar
+        if self._deve_abortar_mudanca():
+            self._abortar_mudanca_faixa()
+            return
+        
+        # Calcula progresso da interpolação
+        progresso = 1.0 - (self.frames_troca / CONFIG.FRAMES_TROCA_FAIXA)
+        progresso = self._aplicar_easing(progresso)
+        
+        # Calcula posição lateral atual
+        posicao_lateral_atual = self.posicao_lateral_inicial + progresso * (self.posicao_lateral_final - self.posicao_lateral_inicial)
+        
+        # Atualiza posição lateral
+        if self.direcao == Direcao.NORTE:
+            self.posicao[0] = posicao_lateral_atual
+        elif self.direcao == Direcao.LESTE:
+            self.posicao[1] = posicao_lateral_atual
+        
+        self.frames_troca -= 1
+    
+    def _finalizar_mudanca_faixa(self) -> None:
+        """Finaliza a mudança de faixa."""
+        if self.faixa_alvo is not None and self.lane_manager:
+            # Move veículo para nova faixa
+            self.lane_manager.atribuir_veiculo_faixa(self, self.faixa_alvo)
+            self.faixa_atual = self.faixa_alvo
+        
+        # Reseta estado
+        self.estado_faixa = EstadoFaixa.KEEP_LANE
+        self.faixa_alvo = None
+        self.frames_troca = 0
+        self.velocidade_lateral = 0.0
+    
+    def _abortar_mudanca_faixa(self) -> None:
+        """Aborta a mudança de faixa e retorna à faixa original."""
+        # Retorna à posição original
+        if self.lane_manager:
+            faixa_atual = self.lane_manager.faixas[self.faixa_atual]
+            if self.direcao == Direcao.NORTE:
+                self.posicao[0] = faixa_atual.posicao_central
+            elif self.direcao == Direcao.LESTE:
+                self.posicao[1] = faixa_atual.posicao_central
+        
+        # Reseta estado
+        self.estado_faixa = EstadoFaixa.KEEP_LANE
+        self.faixa_alvo = None
+        self.frames_troca = 0
+        self.velocidade_lateral = 0.0
+    
+    def _deve_abortar_mudanca(self) -> bool:
+        """Verifica se deve abortar a mudança de faixa."""
+        if not self.lane_manager or self.faixa_alvo is None:
+            return True
+        
+        faixa_alvo = self.lane_manager.faixas[self.faixa_alvo]
+        
+        # Verifica TTC crítico
+        lider = faixa_alvo.obter_veiculo_frente(self)
+        if lider:
+            ttc = SafetyChecker._calcular_ttc(self, lider)
+            if ttc < CONFIG.TTC_ABORT:
+                return True
+        
+        seguidor = faixa_alvo.obter_veiculo_atras(self)
+        if seguidor:
+            ttc = SafetyChecker._calcular_ttc(seguidor, self)
+            if ttc < CONFIG.TTC_ABORT:
+                return True
+        
+        return False
+    
+    def _proximo_de_intersecao(self) -> bool:
+        """Verifica se está próximo de uma interseção."""
+        # Simplificado: verifica se está próximo de um cruzamento
+        if not self.malha_viaria:
+            return False
+        
+        # Acessa cruzamentos através da malha
+        if hasattr(self.malha_viaria, 'cruzamentos'):
+            for cruzamento_id, cruzamento in self.malha_viaria.cruzamentos.items():
+                distancia = math.sqrt(
+                    (self.posicao[0] - cruzamento.centro_x) ** 2 + 
+                    (self.posicao[1] - cruzamento.centro_y) ** 2
+                )
+                if distancia < CONFIG.ZONA_INTERSECAO:
+                    return True
+        
+        return False
+    
+    def _aplicar_easing(self, progresso: float) -> float:
+        """Aplica easing à interpolação."""
+        if CONFIG.EASING_TROCA == "ease_in_out":
+            # Easing suave
+            return 3 * progresso ** 2 - 2 * progresso ** 3
+        else:
+            # Linear
+            return progresso
+    
+    def aplicar_idm(self, todos_veiculos: List['Veiculo']) -> None:
+        """Aplica IDM para controle longitudinal."""
+        if not self.lane_manager:
+            return
+        
+        faixa_atual = self.lane_manager.obter_faixa_veiculo(self)
+        if not faixa_atual:
+            return
+        
+        # Obtém veículo à frente
+        veiculo_frente = faixa_atual.obter_veiculo_frente(self)
+        
+        # Calcula aceleração usando IDM
+        acel_idm = IDM.calcular_aceleracao(self, veiculo_frente)
+        
+        # Aplica aceleração
+        self.aceleracao_atual = acel_idm
+    
+    def solicitar_reserva_intersecao(self) -> bool:
+        """
+        Solicita reserva de interseção se próximo de uma.
+        
+        Returns:
+            True se a reserva foi concedida
+        """
+        if not self.intersection_manager:
+            return False
+        
+        # Verifica se está próximo de interseção
+        if not self._proximo_de_intersecao():
+            return False
+        
+        # Se já tem reserva, não solicita novamente
+        if self.reserva_ativa:
+            return True
+        
+        # Determina movimento baseado na direção e rota
+        movimento = self._determinar_movimento_intersecao()
+        if not movimento:
+            return False
+        
+        # Calcula janela temporal
+        t0 = self.tempo_atual
+        t1 = t0 + CONFIG.DT_RESERVA
+        
+        # Calcula bounding box da trajetória
+        bbox_traj = self._calcular_bbox_trajetoria_intersecao()
+        
+        # Solicita reserva
+        if self.intersection_manager.request(
+            self.id, movimento, t0, t1, bbox_traj, self.prioridade
+        ):
+            self.reserva_ativa = True
+            self.tempo_espera_intersecao = 0.0
+            return True
+        
+        return False
+    
+    def liberar_reserva_intersecao(self) -> None:
+        """Libera reserva de interseção."""
+        if self.intersection_manager and self.reserva_ativa:
+            self.intersection_manager.release(self.id)
+            self.reserva_ativa = False
+            self.tempo_espera_intersecao = 0.0
+    
+    def _determinar_movimento_intersecao(self) -> Optional[Tuple[Direcao, TipoMovimento]]:
+        """
+        Determina o movimento na interseção baseado na direção e rota.
+        
+        Returns:
+            Tupla (direção, tipo_movimento) ou None
+        """
+        # Por simplicidade, assume movimento reto
+        # Em uma implementação completa, usaria a rota planejada
+        if self.direcao == Direcao.NORTE:
+            return (Direcao.NORTE, TipoMovimento.RETA)
+        elif self.direcao == Direcao.LESTE:
+            return (Direcao.LESTE, TipoMovimento.RETA)
+        
+        return None
+    
+    def _calcular_bbox_trajetoria_intersecao(self) -> pygame.Rect:
+        """
+        Calcula bounding box da trajetória na interseção.
+        
+        Returns:
+            Bounding box da trajetória
+        """
+        # Por simplicidade, usa o retângulo atual do veículo
+        # Em uma implementação completa, projetaria a trajetória futura
+        return self.rect.copy()
+    
+    def verificar_bloqueio_intersecao(self) -> bool:
+        """
+        Verifica se deve ser bloqueado por não ter reserva de interseção.
+        
+        Returns:
+            True se deve ser bloqueado
+        """
+        if not self.intersection_manager:
+            return False
+        
+        # Se não está próximo de interseção, não bloqueia
+        if not self._proximo_de_intersecao():
+            return False
+        
+        # Se tem reserva ativa, não bloqueia
+        if self.reserva_ativa:
+            return False
+        
+        # Verifica se está tentando entrar sem reserva
+        return self.intersection_manager.verificar_entrada_sem_reserva(self.id)
+    
+    def _atualizar_reservas_intersecao(self, dt: float) -> None:
+        """Atualiza sistema de reservas de interseção."""
+        if not self.intersection_manager:
+            return
+        
+        # Solicita reserva se próximo de interseção
+        if self._proximo_de_intersecao():
+            if not self.reserva_ativa:
+                self.solicitar_reserva_intersecao()
+        else:
+            # Libera reserva se saiu da interseção
+            if self.reserva_ativa:
+                self.liberar_reserva_intersecao()
+        
+        # Verifica timeout de espera
+        if self.tempo_espera_intersecao > CONFIG.TEMPO_ESPERA_MAX:
+            # Fallback: libera via movimento retilíneo se possível
+            if self._pode_liberar_fallback():
+                self.liberar_reserva_intersecao()
+                self.tempo_espera_intersecao = 0.0
+    
+    def _pode_liberar_fallback(self) -> bool:
+        """Verifica se pode liberar via fallback (movimento retilíneo)."""
+        if not self.intersection_manager:
+            return False
+        
+        # Verifica se semáforo está verde
+        if not self.intersection_manager.semaforo_verde:
+            return False
+        
+        # Verifica se não há conflitos com movimento reto
+        movimento = self._determinar_movimento_intersecao()
+        if not movimento:
+            return False
+        
+        # Verifica se pode solicitar reserva
+        t0 = self.tempo_atual
+        t1 = t0 + CONFIG.DT_RESERVA
+        bbox_traj = self._calcular_bbox_trajetoria_intersecao()
+        
+        return self.intersection_manager.can_request(movimento, (t0, t1), bbox_traj)
     
     def _atualizar_rect(self) -> None:
         """Atualiza o retângulo de colisão do veículo."""
@@ -207,17 +790,16 @@ class Veiculo:
             if not self.aguardando_semaforo:
                 self.aceleracao_atual = CONFIG.ACELERACAO_VEICULO
 
-    # troque a assinatura atual por esta
     def atualizar(self, dt: float = 1.0, todos_veiculos: List['Veiculo'] = None, malha=None) -> None:
         """
-        Atualiza o estado do veículo.
+        Atualiza o estado do veículo com sistema de rotas e segurança.
 
         Args:
             dt: Delta time para cálculos de física
             todos_veiculos: Lista de todos os veículos para verificação de colisão
             malha: MalhaViaria para aplicar o fator de 'caos' (limite local de velocidade)
         """
-        # métricas (igual ao seu)
+        # Métricas
         self.tempo_viagem += dt
         if self.velocidade < 0.1:
             self.tempo_parado += dt
@@ -227,15 +809,32 @@ class Veiculo:
         else:
             self.parado = False
 
-        # aplica aceleração
+        # Sistema de rotas
+        if self.malha_viaria and self.verificar_necessidade_recalculo():
+            self.recalcular_rota()
+
+        # Sistema de mudança de faixa
+        self.atualizar_mudanca_faixa()
+
+        # Sistema de reservas de interseção
+        self._atualizar_reservas_intersecao(dt)
+
+        # Aplica IDM para controle longitudinal
+        self.aplicar_idm(todos_veiculos)
+
+        # Controle de segurança
+        if todos_veiculos:
+            self.aplicar_controle_seguranca(todos_veiculos)
+
+        # Aplica aceleração
         self.velocidade += self.aceleracao_atual * dt
 
-        # >>> limite de velocidade com fator local (CAOS)
+        # Limite de velocidade com fator local (CAOS)
         fator = malha.obter_fator_caos(self) if malha is not None else 1.0
         vmax_local = CONFIG.VELOCIDADE_MAX_VEICULO * fator
         self.velocidade = max(CONFIG.VELOCIDADE_MIN_VEICULO, min(vmax_local, self.velocidade))
 
-        # colisão futura (igual ao seu)
+        # Verificação de colisão futura
         if todos_veiculos and self.velocidade > 0:
             if self.verificar_colisao_futura(todos_veiculos):
                 self.velocidade = 0
@@ -243,7 +842,7 @@ class Veiculo:
                 self._atualizar_rect()
                 return
 
-        # movimento (igual ao seu)
+        # Movimento
         dx, dy = 0, 0
         if self.direcao == Direcao.NORTE:
             dy = self.velocidade
@@ -256,7 +855,10 @@ class Veiculo:
 
         self._atualizar_rect()
 
-        # saída da tela (igual ao seu)
+        # Atualiza próximo nó da rota
+        self._atualizar_proximo_no()
+
+        # Saída da tela
         margem = 100
         if (self.posicao[0] < -margem or
                 self.posicao[0] > CONFIG.LARGURA_TELA + margem or
@@ -540,6 +1142,16 @@ class Veiculo:
             elif self.veiculo_frente and self.distancia_veiculo_frente < CONFIG.DISTANCIA_REACAO:
                 aguardando = "🚗"
             
-            texto = f"V:{self.velocidade:.1f} ID:{self.id} {aguardando}"
+            # Adiciona indicador de mudança de faixa
+            mudanca_faixa = ""
+            if self.estado_faixa == EstadoFaixa.LANE_CHANGE_LEFT:
+                mudanca_faixa = "⬅️"
+            elif self.estado_faixa == EstadoFaixa.LANE_CHANGE_RIGHT:
+                mudanca_faixa = "➡️"
+            
+            # Adiciona indicador de reserva de interseção
+            reserva = "🔒" if self.reserva_ativa else ""
+            
+            texto = f"V:{self.velocidade:.1f} ID:{self.id} F:{self.faixa_atual} {aguardando}{mudanca_faixa}{reserva}"
             superficie_texto = fonte.render(texto, True, CONFIG.BRANCO)
             tela.blit(superficie_texto, (self.posicao[0] - 20, self.posicao[1] - 25))

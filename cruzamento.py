@@ -4,11 +4,227 @@ Sistema com vias de mão única: Horizontal (Leste→Oeste) e Vertical (Norte→
 """
 import random
 import math
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional, Set
+from dataclasses import dataclass
+from enum import Enum
 import pygame
 from configuracao import CONFIG, Direcao, TipoHeuristica
 from veiculo import Veiculo
 from semaforo import Semaforo, GerenciadorSemaforos
+from malha_viaria import TipoMovimento, MalhaViaria as MalhaViariaPathfinding
+from sistema_faixas import LaneManager
+from intersection_manager import IntersectionManager
+
+
+@dataclass
+class ReservaIntersecao:
+    """Representa uma reserva de interseção."""
+    veiculo_id: int
+    movimento: TipoMovimento
+    tempo_inicio: float
+    tempo_fim: float
+    bbox_trajetoria: pygame.Rect
+    ativa: bool = True
+
+
+class IntersectionManager:
+    """Gerencia reservas de interseção para evitar colisões."""
+    
+    def __init__(self, cruzamento_id: Tuple[int, int], posicao: Tuple[float, float]):
+        """
+        Inicializa o gerenciador de interseção.
+        
+        Args:
+            cruzamento_id: ID do cruzamento
+            posicao: Posição do centro do cruzamento
+        """
+        self.cruzamento_id = cruzamento_id
+        self.posicao = posicao
+        self.reservas_ativas: List[ReservaIntersecao] = []
+        self.mapa_conflitos = self._criar_mapa_conflitos()
+        self.tempo_atual = 0.0
+    
+    def _criar_mapa_conflitos(self) -> Dict[Tuple[Direcao, TipoMovimento], Set[Tuple[Direcao, TipoMovimento]]]:
+        """
+        Cria mapa de conflitos para os 12 movimentos possíveis.
+        Para mão única, temos apenas 2 direções x 3 movimentos = 6 movimentos.
+        """
+        conflitos = {}
+        
+        # Movimentos possíveis para mão única
+        movimentos = [
+            (Direcao.NORTE, TipoMovimento.RETA),
+            (Direcao.NORTE, TipoMovimento.ESQUERDA),
+            (Direcao.NORTE, TipoMovimento.DIREITA),
+            (Direcao.LESTE, TipoMovimento.RETA),
+            (Direcao.LESTE, TipoMovimento.ESQUERDA),
+            (Direcao.LESTE, TipoMovimento.DIREITA)
+        ]
+        
+        # Define conflitos baseados na geometria do cruzamento
+        for movimento in movimentos:
+            conflitos[movimento] = set()
+            
+            for outro_movimento in movimentos:
+                if movimento != outro_movimento:
+                    # Conflitos básicos: movimentos opostos e perpendiculares
+                    if self._movimentos_conflitam(movimento, outro_movimento):
+                        conflitos[movimento].add(outro_movimento)
+        
+        return conflitos
+    
+    def _movimentos_conflitam(self, mov1: Tuple[Direcao, TipoMovimento], mov2: Tuple[Direcao, TipoMovimento]) -> bool:
+        """
+        Verifica se dois movimentos conflitam.
+        
+        Args:
+            mov1: Primeiro movimento (direção, tipo)
+            mov2: Segundo movimento (direção, tipo)
+            
+        Returns:
+            True se os movimentos conflitam
+        """
+        dir1, tipo1 = mov1
+        dir2, tipo2 = mov2
+        
+        # Mesma direção: sempre conflita
+        if dir1 == dir2:
+            return True
+        
+        # Direções perpendiculares: verifica se há interseção
+        if dir1 == Direcao.NORTE and dir2 == Direcao.LESTE:
+            # Norte vs Leste: conflita se ambos vão reto ou se um vira
+            return (tipo1 == TipoMovimento.RETA and tipo2 == TipoMovimento.RETA) or \
+                   (tipo1 == TipoMovimento.DIREITA and tipo2 == TipoMovimento.ESQUERDA)
+        
+        if dir1 == Direcao.LESTE and dir2 == Direcao.NORTE:
+            # Leste vs Norte: conflita se ambos vão reto ou se um vira
+            return (tipo1 == TipoMovimento.RETA and tipo2 == TipoMovimento.RETA) or \
+                   (tipo1 == TipoMovimento.ESQUERDA and tipo2 == TipoMovimento.DIREITA)
+        
+        return False
+    
+    def solicitar_reserva(self, veiculo_id: int, movimento: TipoMovimento, direcao: Direcao, 
+                         tempo_inicio: float, bbox_trajetoria: pygame.Rect) -> bool:
+        """
+        Solicita uma reserva de interseção.
+        
+        Args:
+            veiculo_id: ID do veículo
+            movimento: Tipo de movimento
+            direcao: Direção do veículo
+            tempo_inicio: Tempo de início da reserva
+            bbox_trajetoria: Bounding box da trajetória
+            
+        Returns:
+            True se a reserva foi concedida
+        """
+        # Calcula tempo de fim baseado no tamanho da trajetória
+        tempo_fim = tempo_inicio + CONFIG.DT_RESERVA
+        
+        # Verifica conflitos com reservas ativas
+        movimento_chave = (direcao, movimento)
+        conflitos = self.mapa_conflitos.get(movimento_chave, set())
+        
+        for reserva in self.reservas_ativas:
+            if not reserva.ativa:
+                continue
+            
+            # Verifica conflito temporal
+            if self._tempos_conflitam(tempo_inicio, tempo_fim, reserva.tempo_inicio, reserva.tempo_fim):
+                # Verifica conflito espacial
+                if bbox_trajetoria.colliderect(reserva.bbox_trajetoria):
+                    # Verifica conflito de movimento
+                    reserva_movimento = self._obter_movimento_reserva(reserva)
+                    if reserva_movimento in conflitos:
+                        return False  # Conflito detectado
+        
+        # Cria nova reserva
+        nova_reserva = ReservaIntersecao(
+            veiculo_id=veiculo_id,
+            movimento=movimento,
+            tempo_inicio=tempo_inicio,
+            tempo_fim=tempo_fim,
+            bbox_trajetoria=bbox_trajetoria
+        )
+        
+        self.reservas_ativas.append(nova_reserva)
+        return True
+    
+    def _tempos_conflitam(self, inicio1: float, fim1: float, inicio2: float, fim2: float) -> bool:
+        """Verifica se dois intervalos de tempo conflitam."""
+        return not (fim1 <= inicio2 or fim2 <= inicio1)
+    
+    def _obter_movimento_reserva(self, reserva: ReservaIntersecao) -> Tuple[Direcao, TipoMovimento]:
+        """Obtém o movimento de uma reserva (simplificado)."""
+        # Em uma implementação completa, isso seria armazenado na reserva
+        # Por simplicidade, assumimos que todas as reservas são retas
+        return (Direcao.NORTE, reserva.movimento)  # Simplificado
+    
+    def liberar_reserva(self, veiculo_id: int):
+        """
+        Libera uma reserva de interseção.
+        
+        Args:
+            veiculo_id: ID do veículo
+        """
+        for reserva in self.reservas_ativas:
+            if reserva.veiculo_id == veiculo_id:
+                reserva.ativa = False
+                break
+    
+    def limpar_reservas_expiradas(self, tempo_atual: float):
+        """
+        Remove reservas expiradas.
+        
+        Args:
+            tempo_atual: Tempo atual da simulação
+        """
+        self.reservas_ativas = [
+            reserva for reserva in self.reservas_ativas
+            if reserva.ativa and reserva.tempo_fim > tempo_atual
+        ]
+    
+    def atualizar_tempo(self, tempo_atual: float):
+        """
+        Atualiza o tempo interno do gerenciador.
+        
+        Args:
+            tempo_atual: Tempo atual da simulação
+        """
+        self.tempo_atual = tempo_atual
+        self.limpar_reservas_expiradas(tempo_atual)
+    
+    def obter_reservas_ativas(self) -> List[ReservaIntersecao]:
+        """Retorna lista de reservas ativas."""
+        return [r for r in self.reservas_ativas if r.ativa]
+    
+    def verificar_conflito_imediato(self, movimento: TipoMovimento, direcao: Direcao, 
+                                   bbox_trajetoria: pygame.Rect) -> bool:
+        """
+        Verifica se há conflito imediato sem criar reserva.
+        
+        Args:
+            movimento: Tipo de movimento
+            direcao: Direção do veículo
+            bbox_trajetoria: Bounding box da trajetória
+            
+        Returns:
+            True se há conflito imediato
+        """
+        movimento_chave = (direcao, movimento)
+        conflitos = self.mapa_conflitos.get(movimento_chave, set())
+        
+        for reserva in self.reservas_ativas:
+            if not reserva.ativa:
+                continue
+            
+            if bbox_trajetoria.colliderect(reserva.bbox_trajetoria):
+                reserva_movimento = self._obter_movimento_reserva(reserva)
+                if reserva_movimento in conflitos:
+                    return True
+        
+        return False
 
 
 class Cruzamento:
@@ -35,6 +251,9 @@ class Cruzamento:
         self.centro_x, self.centro_y = posicao
         self.gerenciador_semaforos = gerenciador_semaforos
         self.malha = malha_viaria  # <<< referência à malha
+        
+        # IntersectionManager para controle de conflitos
+        self.intersection_manager = IntersectionManager(id_cruzamento, posicao)
 
         # Veículos no cruzamento - APENAS DIREÇÕES PERMITIDAS
         self.veiculos_por_direcao: Dict[Direcao, List[Veiculo]] = {
@@ -125,6 +344,37 @@ class Cruzamento:
                 # Verifica se há espaço
                 if self._tem_espaco_para_gerar(direcao, posicao):
                     veiculo = Veiculo(direcao, posicao, self.id)
+                    
+                    # Define rota para o veículo
+                    if self.malha and self.malha.malha_pathfinding:
+                        destino = self.malha.malha_pathfinding.obter_destino_aleatorio(self.id)
+                        rota = self.malha.malha_pathfinding.calcular_rota(
+                            self.id, destino, CONFIG.ALGORITMO_PATHFINDING
+                        )
+                        if rota:
+                            veiculo.definir_rota(rota, self.malha.malha_pathfinding)
+                    
+                    # Define lane manager para o veículo
+                    if self.malha and self.malha.lane_managers:
+                        # Determina qual lane manager usar baseado na direção e posição
+                        if direcao == Direcao.LESTE:
+                            linha = self.id[0]
+                            lane_manager = self.malha.lane_managers.get((linha, -1))
+                        elif direcao == Direcao.NORTE:
+                            coluna = self.id[1]
+                            lane_manager = self.malha.lane_managers.get((-1, coluna))
+                        else:
+                            lane_manager = None
+                        
+                    if lane_manager:
+                        veiculo.definir_lane_manager(lane_manager)
+                    
+                    # Atribui intersection manager
+                    if self.malha and hasattr(self.malha, 'intersection_managers'):
+                        intersection_manager = self.malha.intersection_managers.get(self.id)
+                        if intersection_manager:
+                            veiculo.definir_intersection_manager(intersection_manager)
+                    
                     novos_veiculos.append(veiculo)
                     self.veiculos_por_direcao[direcao].append(veiculo)
 
@@ -215,6 +465,18 @@ class Cruzamento:
                 # IMPORTANTE: Processa interação com TODOS os veículos, não apenas os do cruzamento
                 veiculo.processar_todos_veiculos(todos_veiculos)
 
+                # Sistema de reservas de interseção
+                if self._veiculo_proximo_ao_cruzamento(veiculo):
+                    # Verifica se precisa solicitar reserva
+                    if not veiculo.estado_reserva and veiculo.proximo_no:
+                        # Solicita reserva de interseção
+                        reserva_concedida = veiculo.solicitar_reserva_intersecao()
+                        if not reserva_concedida:
+                            # Reserva negada: para o veículo
+                            veiculo.velocidade = 0
+                            veiculo.aceleracao_atual = 0
+                            continue
+
                 # Processa semáforo se estiver antes da linha
                 if semaforo:
                     posicao_parada = semaforo.obter_posicao_parada()
@@ -227,6 +489,10 @@ class Cruzamento:
                 # >>> agora passamos a malha para aplicar o "caos" local de velocidade
                 veiculo.atualizar(1.0, todos_veiculos, self.malha)
 
+                # Libera reserva se saiu do cruzamento
+                if veiculo.estado_reserva and not self._veiculo_proximo_ao_cruzamento(veiculo):
+                    veiculo.liberar_reserva_intersecao(self)
+
                 # Atualiza estatísticas
                 if veiculo.parado and veiculo.aguardando_semaforo:
                     self.estatisticas['tempo_espera_acumulado'] += 1
@@ -236,6 +502,9 @@ class Cruzamento:
             len(veiculos) for direcao, veiculos in self.veiculos_por_direcao.items()
             if direcao in CONFIG.DIRECOES_PERMITIDAS
         )
+        
+        # Atualiza IntersectionManager
+        self.intersection_manager.atualizar_tempo(self.malha.metricas['tempo_simulacao'] / CONFIG.FPS)
 
     def _veiculo_antes_da_linha(self, veiculo: Veiculo, posicao_parada: Tuple[float, float]) -> bool:
         """
@@ -281,6 +550,55 @@ class Cruzamento:
             return sorted(veiculos, key=lambda v: v.posicao[0], reverse=True)
 
         return veiculos
+
+    def solicitar_reserva_intersecao(self, veiculo_id: int, movimento: TipoMovimento, 
+                                   direcao: Direcao, bbox_trajetoria: pygame.Rect) -> bool:
+        """
+        Solicita reserva de interseção para um veículo.
+        
+        Args:
+            veiculo_id: ID do veículo
+            movimento: Tipo de movimento
+            direcao: Direção do veículo
+            bbox_trajetoria: Bounding box da trajetória
+            
+        Returns:
+            True se a reserva foi concedida
+        """
+        tempo_atual = self.malha.metricas['tempo_simulacao'] / CONFIG.FPS
+        return self.intersection_manager.solicitar_reserva(
+            veiculo_id, movimento, direcao, tempo_atual, bbox_trajetoria
+        )
+    
+    def liberar_reserva_intersecao(self, veiculo_id: int):
+        """
+        Libera reserva de interseção de um veículo.
+        
+        Args:
+            veiculo_id: ID do veículo
+        """
+        self.intersection_manager.liberar_reserva(veiculo_id)
+    
+    def verificar_conflito_intersecao(self, movimento: TipoMovimento, direcao: Direcao, 
+                                    bbox_trajetoria: pygame.Rect) -> bool:
+        """
+        Verifica se há conflito imediato na interseção.
+        
+        Args:
+            movimento: Tipo de movimento
+            direcao: Direção do veículo
+            bbox_trajetoria: Bounding box da trajetória
+            
+        Returns:
+            True se há conflito
+        """
+        return self.intersection_manager.verificar_conflito_imediato(
+            movimento, direcao, bbox_trajetoria
+        )
+    
+    def obter_reservas_ativas(self) -> List[ReservaIntersecao]:
+        """Retorna lista de reservas ativas da interseção."""
+        return self.intersection_manager.obter_reservas_ativas()
 
     def obter_densidade_por_direcao(self) -> Dict[Direcao, int]:
         """Retorna a densidade de veículos por direção."""
@@ -358,6 +676,15 @@ class MalhaViaria:
         # Gerenciador de semáforos
         self.gerenciador_semaforos = GerenciadorSemaforos(CONFIG.HEURISTICA_ATIVA)
 
+        # Sistema de pathfinding
+        self.malha_pathfinding = MalhaViariaPathfinding(linhas, colunas)
+
+        # Sistema de faixas
+        self.lane_managers: Dict[Tuple[int, int], LaneManager] = {}
+        self.intersection_managers: Dict[Tuple[int, int], IntersectionManager] = {}
+        self._inicializar_lane_managers()
+        self._inicializar_intersection_managers()
+
         # Efeito "caos" por via/trecho
         self._inicializar_caos()  # <<< inicializa mapas de caos
 
@@ -372,6 +699,28 @@ class MalhaViaria:
             'tempo_viagem_total': 0,
             'tempo_parado_total': 0
         }
+    
+    def _inicializar_lane_managers(self):
+        """Inicializa os gerenciadores de faixas para cada via."""
+        # Cria lane managers para vias horizontais
+        for linha in range(self.linhas):
+            y = CONFIG.POSICAO_INICIAL_Y + linha * CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS
+            self.lane_managers[(linha, -1)] = LaneManager(Direcao.LESTE, y, CONFIG.NUM_FAIXAS)
+        
+        # Cria lane managers para vias verticais
+        for coluna in range(self.colunas):
+            x = CONFIG.POSICAO_INICIAL_X + coluna * CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS
+            self.lane_managers[(-1, coluna)] = LaneManager(Direcao.NORTE, x, CONFIG.NUM_FAIXAS)
+    
+    def _inicializar_intersection_managers(self):
+        """Inicializa os intersection managers para cada cruzamento."""
+        for linha in range(self.linhas):
+            for coluna in range(self.colunas):
+                x = CONFIG.POSICAO_INICIAL_X + coluna * CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS
+                y = CONFIG.POSICAO_INICIAL_Y + linha * CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS
+                self.intersection_managers[(linha, coluna)] = IntersectionManager(
+                    (linha, coluna), (x, y)
+                )
 
     # -------------------
     # EFEITO CAOS - ruas
@@ -457,6 +806,14 @@ class MalhaViaria:
 
         # Atualiza "caos" das vias
         self.atualizar_caos()
+
+        # Atualiza lane managers
+        for lane_manager in self.lane_managers.values():
+            lane_manager.atualizar_posicoes_veiculos()
+        
+        # Atualiza intersection managers
+        for intersection_manager in self.intersection_managers.values():
+            intersection_manager.atualizar_tempo(self.metricas['tempo_simulacao'])
 
         # Gera novos veículos
         for cruzamento in self.cruzamentos.values():
@@ -550,8 +907,40 @@ class MalhaViaria:
             'tempo_viagem_medio': tempo_viagem_medio,
             'tempo_parado_medio': tempo_parado_medio,
             'heuristica': self.gerenciador_semaforos.obter_info_heuristica(),
-            'tempo_simulacao': self.metricas['tempo_simulacao'] / CONFIG.FPS
+            'tempo_simulacao': self.metricas['tempo_simulacao'] / CONFIG.FPS,
+            'estatisticas_grafo': self.malha_pathfinding.obter_estatisticas_grafo()
         }
+    
+    def bloquear_aresta(self, origem: Tuple[int, int], destino: Tuple[int, int]):
+        """
+        Bloqueia uma aresta (simula incidente/obra).
+        
+        Args:
+            origem: ID do cruzamento de origem
+            destino: ID do cruzamento de destino
+        """
+        self.malha_pathfinding.bloquear_aresta(origem, destino)
+    
+    def desbloquear_aresta(self, origem: Tuple[int, int], destino: Tuple[int, int]):
+        """
+        Desbloqueia uma aresta.
+        
+        Args:
+            origem: ID do cruzamento de origem
+            destino: ID do cruzamento de destino
+        """
+        self.malha_pathfinding.desbloquear_aresta(origem, destino)
+    
+    def atualizar_custo_aresta(self, origem: Tuple[int, int], destino: Tuple[int, int], novo_custo: float):
+        """
+        Atualiza o custo de uma aresta (simula congestionamento).
+        
+        Args:
+            origem: ID do cruzamento de origem
+            destino: ID do cruzamento de destino
+            novo_custo: Novo custo da aresta
+        """
+        self.malha_pathfinding.atualizar_custo_aresta(origem, destino, novo_custo)
 
     def desenhar(self, tela: pygame.Surface) -> None:
         """Desenha toda a malha viária."""
@@ -565,9 +954,13 @@ class MalhaViaria:
         # Desenha os veículos
         for veiculo in self.veiculos:
             veiculo.desenhar(tela)
+        
+        # Desenha reservas de interseção (debug)
+        for intersection_manager in self.intersection_managers.values():
+            intersection_manager.desenhar_reservas(tela)
 
     def _desenhar_ruas(self, tela: pygame.Surface) -> None:
-        """Desenha as ruas da malha com mão única (e overlay opcional do CAOS)."""
+        """Desenha as ruas da malha com múltiplas faixas (e overlay opcional do CAOS)."""
         # Desenha ruas horizontais (Leste→Oeste)
         for linha in range(self.linhas):
             y = CONFIG.POSICAO_INICIAL_Y + linha * CONFIG.ESPACAMENTO_ENTRE_CRUZAMENTOS
@@ -576,6 +969,9 @@ class MalhaViaria:
             pygame.draw.rect(tela, CONFIG.CINZA_ESCURO,
                            (0, y - CONFIG.LARGURA_RUA // 2,
                             CONFIG.LARGURA_TELA, CONFIG.LARGURA_RUA))
+            
+            # Desenha faixas
+            self._desenhar_faixas_horizontais(tela, y)
 
             # Desenha indicadores de direção
             self._desenhar_setas_horizontais(tela, y, Direcao.LESTE)
@@ -615,6 +1011,9 @@ class MalhaViaria:
             pygame.draw.rect(tela, CONFIG.CINZA_ESCURO,
                            (x - CONFIG.LARGURA_RUA // 2, 0,
                             CONFIG.LARGURA_RUA, CONFIG.ALTURA_TELA))
+            
+            # Desenha faixas
+            self._desenhar_faixas_verticais(tela, x)
 
             # Desenha indicadores de direção
             self._desenhar_setas_verticais(tela, x, Direcao.NORTE)
@@ -698,3 +1097,35 @@ class MalhaViaria:
                     (x, y)
                 ]
                 pygame.draw.polygon(tela, CONFIG.AMARELO, pontos)
+    
+    def _desenhar_faixas_horizontais(self, tela: pygame.Surface, y: float) -> None:
+        """Desenha as faixas de uma rua horizontal."""
+        if not CONFIG.MOSTRAR_GRID:
+            return
+        
+        # Desenha linhas divisórias das faixas
+        cor_linha = CONFIG.CINZA_CLARO
+        largura_linha = 1
+        
+        for i in range(1, CONFIG.NUM_FAIXAS):
+            x_faixa = CONFIG.POSICAO_INICIAL_X + i * CONFIG.LARGURA_FAIXA
+            pygame.draw.line(tela, cor_linha,
+                           (0, y - CONFIG.LARGURA_RUA // 2 + i * CONFIG.LARGURA_FAIXA),
+                           (CONFIG.LARGURA_TELA, y - CONFIG.LARGURA_RUA // 2 + i * CONFIG.LARGURA_FAIXA),
+                           largura_linha)
+    
+    def _desenhar_faixas_verticais(self, tela: pygame.Surface, x: float) -> None:
+        """Desenha as faixas de uma rua vertical."""
+        if not CONFIG.MOSTRAR_GRID:
+            return
+        
+        # Desenha linhas divisórias das faixas
+        cor_linha = CONFIG.CINZA_CLARO
+        largura_linha = 1
+        
+        for i in range(1, CONFIG.NUM_FAIXAS):
+            y_faixa = CONFIG.POSICAO_INICIAL_Y + i * CONFIG.LARGURA_FAIXA
+            pygame.draw.line(tela, cor_linha,
+                           (x - CONFIG.LARGURA_RUA // 2 + i * CONFIG.LARGURA_FAIXA, 0),
+                           (x - CONFIG.LARGURA_RUA // 2 + i * CONFIG.LARGURA_FAIXA, CONFIG.ALTURA_TELA),
+                           largura_linha)

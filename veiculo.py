@@ -16,7 +16,7 @@ class Veiculo:
     # Contador estático para IDs únicos
     _contador_id = 0
     
-    def __init__(self, direcao: Direcao, posicao: Tuple[float, float], id_cruzamento_origem: Tuple[int, int]):
+    def __init__(self, direcao: Direcao, posicao: Tuple[float, float], id_cruzamento_origem: Tuple[int, int], indice_faixa: int = 0):
         """
         Inicializa um veículo.
         
@@ -39,6 +39,7 @@ class Veiculo:
         self.posicao_inicial = list(posicao)
         self.id_cruzamento_origem = id_cruzamento_origem
         self.id_cruzamento_atual = id_cruzamento_origem
+        self.indice_faixa = int(indice_faixa)
         self.cor = random.choice(CONFIG.CORES_VEICULO)
         self.ativo = True
         
@@ -95,7 +96,193 @@ class Veiculo:
                 self.altura,
                 self.largura
             )
-    
+
+
+    # ===============================
+    # MOBIL-lite / Gap acceptance
+    # ===============================
+
+    def _faixas_por_via(self) -> int:
+        return getattr(CONFIG, "FAIXAS_POR_VIA", max(2, int(CONFIG.LARGURA_RUA // CONFIG.LARGURA_FAIXA)))
+
+    def _garantir_campos_lane(self) -> None:
+        if not hasattr(self, "indice_faixa"):
+            self.indice_faixa = 0
+        if not hasattr(self, "cooldown_mudanca_faixa"):
+            self.cooldown_mudanca_faixa = 0
+        if not hasattr(self, "vmax_local_atual"):
+            self.vmax_local_atual = CONFIG.VELOCIDADE_MAX_VEICULO
+        if not hasattr(self, "frames_pos_troca"):
+            self.frames_pos_troca = 0
+
+    def _via_indice_e_centro(self) -> tuple[int, float]:
+        if self.direcao == Direcao.LESTE:
+            idx = round((self.posicao[1] - CONFIG.POSICAO_INICIAL_Y) / CONFIG.ESPACAMENTO_VERTICAL)
+            idx = max(0, min(idx, CONFIG.LINHAS_GRADE - 1))
+            yc = CONFIG.POSICAO_INICIAL_Y + idx * CONFIG.ESPACAMENTO_VERTICAL
+            return idx, yc
+        else:  # NORTE
+            idx = round((self.posicao[0] - CONFIG.POSICAO_INICIAL_X) / CONFIG.ESPACAMENTO_HORIZONTAL)
+            idx = max(0, min(idx, CONFIG.COLUNAS_GRADE - 1))
+            xc = CONFIG.POSICAO_INICIAL_X + idx * CONFIG.ESPACAMENTO_HORIZONTAL
+            return idx, xc
+
+    def _coord_centro_faixa(self, idx_faixa: int) -> float:
+        """Coordenada lateral (y se LESTE, x se NORTE) do centro da faixa pedida na via atual."""
+        _, centro_via = self._via_indice_e_centro()
+        return (centro_via - CONFIG.LARGURA_RUA / 2.0
+                + CONFIG.LARGURA_FAIXA * (idx_faixa + 0.5))
+
+    def _mesma_via_mesma_faixa(self, outro: 'Veiculo', idx_faixa: int | None = None) -> bool:
+        """True se 'outro' está na mesma via (mesmo centro) e na faixa indicada (ou na minha atual)."""
+        if outro.direcao != self.direcao:
+            return False
+        via_self, centro_self = self._via_indice_e_centro()
+        via_outro, centro_outro = outro._via_indice_e_centro()
+        if via_self != via_outro:
+            return False
+        # tolerância para lateral
+        tol = CONFIG.LARGURA_FAIXA * 0.5
+        faixa = self.indice_faixa if idx_faixa is None else idx_faixa
+        alvo_lateral = self._coord_centro_faixa(faixa)
+        if self.direcao == Direcao.LESTE:
+            return abs(outro.posicao[1] - alvo_lateral) < tol
+        else:
+            return abs(outro.posicao[0] - alvo_lateral) < tol
+
+    def _distancia_1d(self, outro: 'Veiculo') -> float:
+        """
+        Distância 1D ao longo do eixo de movimento até o centro do 'outro'.
+        > 0 => 'outro' está à frente; < 0 => está atrás; INF se não é mesma via (lateralmente muito fora).
+        """
+        via_ok = abs((self.posicao[1] if self.direcao == Direcao.LESTE else self.posicao[0]) -
+                     (outro.posicao[1] if self.direcao == Direcao.LESTE else outro.posicao[0])) <= CONFIG.LARGURA_RUA * 0.6
+        if not via_ok:
+            return float('inf')
+        if self.direcao == Direcao.LESTE:
+            return (outro.posicao[0] - self.posicao[0])
+        else:
+            return (outro.posicao[1] - self.posicao[1])
+
+    def _lider_e_seguidor_na_faixa(self, todos: list['Veiculo'], idx_faixa: int) -> tuple['Veiculo|None','Veiculo|None', float, float]:
+        """
+        Retorna (lider_ahead, seguidor_behind, dist_ahead, dist_behind) na faixa idx_faixa.
+        """
+        lider = None
+        seguidor = None
+        menor_frente = float('inf')
+        menor_atras = float('inf')
+
+        for v in todos:
+            if not v.ativo or v.id == self.id:
+                continue
+            if not self._mesma_via_mesma_faixa(v, idx_faixa):
+                continue
+            d = self._distancia_1d(v)
+            if d > 0 and d < menor_frente:
+                menor_frente = d
+                lider = v
+            elif d < 0:
+                d_abs = -d
+                if d_abs < menor_atras:
+                    menor_atras = d_abs
+                    seguidor = v
+
+        return lider, seguidor, menor_frente, menor_atras
+
+    def _velocidade_limite_por_lider(self, lider: 'Veiculo|None', dist: float) -> float:
+        """
+        Estima a velocidade viável imposta pelo líder a 'dist' (metros/pixels).
+        Usa o mesmo modelo de car-following simplificado da classe.
+        """
+        vcap = getattr(self, "vmax_local_atual", CONFIG.VELOCIDADE_MAX_VEICULO)
+        if not lider:
+            return vcap
+        # Se muito longe, praticamente livre
+        if dist >= CONFIG.DISTANCIA_REACAO * 1.5:
+            return vcap
+        # Senão, use a velocidade segura
+        vseg = self._calcular_velocidade_segura(dist, lider.velocidade)
+        return max(0.0, min(vcap, vseg))
+
+    def _dist_prox_cruzamento(self) -> float:
+        """Distância (ao longo do eixo de movimento) até o próximo cruzamento à frente."""
+        if self.direcao == Direcao.LESTE:
+            col_atual = math.floor((self.posicao[0] - CONFIG.POSICAO_INICIAL_X) / CONFIG.ESPACAMENTO_HORIZONTAL)
+            prox_cx = CONFIG.POSICAO_INICIAL_X + (col_atual + 1) * CONFIG.ESPACAMENTO_HORIZONTAL
+            return prox_cx - self.posicao[0]
+        else:
+            lin_atual = math.floor((self.posicao[1] - CONFIG.POSICAO_INICIAL_Y) / CONFIG.ESPACAMENTO_VERTICAL)
+            prox_cy = CONFIG.POSICAO_INICIAL_Y + (lin_atual + 1) * CONFIG.ESPACAMENTO_VERTICAL
+            return prox_cy - self.posicao[1]
+
+    def pode_mudar_faixa(self, todos: list['Veiculo'], delta: int) -> int | None:
+        """
+        Decide se a mudança para a faixa (indice_faixa + delta) é aceitável, retornando o índice alvo;
+        caso contrário, retorna None.
+        Critérios: gap seguro (à frente e atrás) + ganho de velocidade individual + cooldown + penalidade perto de cruzamento.
+        """
+        self._garantir_campos_lane()
+
+        alvo = self.indice_faixa + delta
+        if alvo < 0 or alvo >= self._faixas_por_via():
+            return None
+
+        # Cooldown para evitar oscilação
+        cooldown_frames = getattr(CONFIG, "COOLDOWN_MUDANCA_FAIXA", 60)
+        if self.cooldown_mudanca_faixa > 0:
+            return None
+
+        # Penalidade perto do cruzamento
+        limite_cruz = getattr(CONFIG, "DIST_MIN_TROCA_PERTO_CRUZAMENTO", max(80, int(CONFIG.LARGURA_RUA * 1.5)))
+        if self._dist_prox_cruzamento() < limite_cruz:
+            return None
+
+        # Líder/seguidor na faixa atual (para estimar minha velocidade "capada")
+        lider_atual, _, dist_atual, _ = self._lider_e_seguidor_na_faixa(todos, self.indice_faixa)
+        vcap_atual = self._velocidade_limite_por_lider(lider_atual, dist_atual)
+
+        # Líder/seguidor na faixa alvo (gap acceptance)
+        lider_alvo, seguidor_alvo, dist_ahead, dist_behind = self._lider_e_seguidor_na_faixa(todos, alvo)
+
+        # Requisitos de segurança (gap)
+        tr = 1.0  # tempo de reação (s)
+        # à frente: distância deve cobrir headway + pequena margem proporcional ao delta de velocidade
+        v_lider = lider_alvo.velocidade if lider_alvo else self.vmax_local_atual
+        req_ahead = CONFIG.DISTANCIA_SEGURANCA + max(0.0, self.velocidade - v_lider) * tr
+        safe_ahead = (dist_ahead == float('inf')) or (dist_ahead > req_ahead)
+
+        # atrás: seguidor precisa ter espaço para reagir a mim
+        if seguidor_alvo:
+            v_seg = seguidor_alvo.velocidade
+        else:
+            v_seg = 0.0
+        req_behind = CONFIG.DISTANCIA_SEGURANCA + max(0.0, v_seg - self.velocidade) * tr
+        safe_behind = (dist_behind == float('inf')) or (dist_behind > req_behind)
+
+        if not (safe_ahead and safe_behind):
+            return None
+
+        # Ganho de velocidade individual: só troca se a faixa alvo permitir ir mais rápido
+        vcap_alvo = self._velocidade_limite_por_lider(lider_alvo, dist_ahead)
+        ganho_min = getattr(CONFIG, "GANHO_MIN_MUDANCA_FAIXA", 0.2)
+        if vcap_alvo <= vcap_atual + ganho_min:
+            return None
+
+        return alvo
+
+    def _aplicar_mudanca_faixa(self, idx_alvo: int) -> None:
+        lateral = self._coord_centro_faixa(idx_alvo)
+        if self.direcao == Direcao.LESTE:
+            self.posicao[1] = lateral
+        else:
+            self.posicao[0] = lateral
+
+        self.indice_faixa = idx_alvo
+        self._atualizar_rect()
+        self.cooldown_mudanca_faixa = getattr(CONFIG, "COOLDOWN_MUDANCA_FAIXA", 60)
+        self.frames_pos_troca = getattr(CONFIG, "GRACE_FRAMES_LANE_CHANGE", 3)
+
     def resetar_controle_semaforo(self, novo_cruzamento_id: Optional[Tuple[int, int]] = None) -> None:
         """
         Reseta o controle de semáforo quando o veículo muda de cruzamento.
@@ -110,77 +297,74 @@ class Veiculo:
             self.pode_passar_amarelo = False
             self.semaforo_proximo = None
             self.distancia_semaforo = float('inf')
-    
+
     def verificar_colisao_futura(self, todos_veiculos: List['Veiculo']) -> bool:
-        """
-        Verifica se haverá colisão se o veículo continuar se movendo.
-        
-        Args:
-            todos_veiculos: Lista de todos os veículos na simulação
-            
-        Returns:
-            True se uma colisão é iminente
-        """
-        # Calcula posição futura
-        dx, dy = 0, 0
+        # posição futura (centro)
+        dx, dy = 0.0, 0.0
+        adiant = CONFIG.DISTANCIA_MIN_VEICULO / 2
         if self.direcao == Direcao.NORTE:
-            dy = self.velocidade + CONFIG.DISTANCIA_MIN_VEICULO / 2
+            dy = self.velocidade + adiant
         elif self.direcao == Direcao.LESTE:
-            dx = self.velocidade + CONFIG.DISTANCIA_MIN_VEICULO / 2
-        
-        posicao_futura = [self.posicao[0] + dx, self.posicao[1] + dy]
-        
-        # Cria retângulo futuro
+            dx = self.velocidade + adiant
+        pos_fut = [self.posicao[0] + dx, self.posicao[1] + dy]
+
+        # rect futuro com mesma orientação
         if self.direcao == Direcao.NORTE:
-            rect_futuro = pygame.Rect(
-                posicao_futura[0] - self.largura // 2,
-                posicao_futura[1] - self.altura // 2,
+            rect_fut = pygame.Rect(
+                pos_fut[0] - self.largura // 2,
+                pos_fut[1] - self.altura // 2,
                 self.largura,
                 self.altura
             )
         else:
-            rect_futuro = pygame.Rect(
-                posicao_futura[0] - self.altura // 2,
-                posicao_futura[1] - self.largura // 2,
+            rect_fut = pygame.Rect(
+                pos_fut[0] - self.altura // 2,
+                pos_fut[1] - self.largura // 2,
                 self.altura,
                 self.largura
             )
-        
-        # Verifica colisão com outros veículos
+
+        # tolerance lateral mínima e somente MESMA FAIXA
         for outro in todos_veiculos:
-            if outro.id == self.id or not outro.ativo:
+            if not outro.ativo or outro.id == self.id:
                 continue
-            
-            # Só verifica veículos na mesma via
-            if not self._mesma_via(outro):
+            # Checa mesma via & MESMA FAIXA explicitamente
+            if not self._mesma_via_mesma_faixa(outro, self.indice_faixa):
                 continue
-            
-            # Expande o retângulo do outro veículo para margem de segurança
-            rect_outro_expandido = outro.rect.inflate(10, 10)
-            
-            if rect_futuro.colliderect(rect_outro_expandido):
+
+            # Se o outro está bem atrás no eixo de movimento, não conta
+            dalong = self._distancia_1d(outro)  # >0 = à frente; <0 = atrás
+            if dalong < -max(self.altura, self.largura) * 0.8:
+                continue
+
+            # Inflar muito pouco para evitar falso positivo lateral
+            # E reduzir ainda mais nos frames de "graça" pós-troca
+            margem = 4 if self.frames_pos_troca == 0 else 1
+            rect_outro = outro.rect.inflate(margem, margem)
+
+            if rect_fut.colliderect(rect_outro):
                 return True
-        
+
         return False
-    
+
     def processar_todos_veiculos(self, todos_veiculos: List['Veiculo']) -> None:
         """
         Processa interação com todos os veículos, não apenas os do cruzamento atual.
-        
-        Args:
-            todos_veiculos: Lista de todos os veículos na simulação
+        + MOBIL-lite: avalia mudança de faixa por gap acceptance e ganho individual.
         """
+        self._garantir_campos_lane()
+
         veiculo_mais_proximo = None
         distancia_minima = float('inf')
-        
+
         for outro in todos_veiculos:
             if outro.id == self.id or not outro.ativo:
                 continue
-            
-            # Verifica se estão na mesma via e direção
+
+            # Verifica se estão na mesma via e direção (mesma faixa atual para car-following)
             if self.direcao != outro.direcao or not self._mesma_via(outro):
                 continue
-            
+
             # Verifica se o outro está à frente
             if self.direcao == Direcao.NORTE:
                 if outro.posicao[1] > self.posicao[1]:  # Outro está à frente (mais para baixo)
@@ -194,8 +378,8 @@ class Veiculo:
                     if distancia < distancia_minima:
                         distancia_minima = distancia
                         veiculo_mais_proximo = outro
-        
-        # Processa o veículo mais próximo à frente
+
+        # Processa o veículo mais próximo à frente (mesma faixa)
         if veiculo_mais_proximo:
             self.veiculo_frente = veiculo_mais_proximo
             self.distancia_veiculo_frente = distancia_minima
@@ -207,17 +391,39 @@ class Veiculo:
             if not self.aguardando_semaforo:
                 self.aceleracao_atual = CONFIG.ACELERACAO_VEICULO
 
+        # =============== Decisão de mudança de faixa (MOBIL-lite) ===============
+        # Tenta esquerda/direita (ordem pode influenciar; aqui preferimos a esquerda primeiro)
+        candidatos = []
+        for delta in (-1, 1):
+            alvo = self.pode_mudar_faixa(todos_veiculos, delta)
+            if alvo is not None:
+                candidatos.append(alvo)
+
+        if candidatos:
+            # Se houver 2 candidatos, escolha o que dá maior vcap (mais ganho)
+            melhor = None
+            melhor_vcap = -1.0
+            for idx_alvo in candidatos:
+                lider, _, dist_ahead, _ = self._lider_e_seguidor_na_faixa(todos_veiculos, idx_alvo)
+                vcap = self._velocidade_limite_por_lider(lider, dist_ahead)
+                if vcap > melhor_vcap:
+                    melhor_vcap = vcap
+                    melhor = idx_alvo
+
+            # Aplica a troca (snap para o centro)
+            if melhor is not None:
+                self._aplicar_mudanca_faixa(melhor)
+
     # troque a assinatura atual por esta
     def atualizar(self, dt: float = 1.0, todos_veiculos: List['Veiculo'] = None, malha=None) -> None:
-        """
-        Atualiza o estado do veículo.
+        # NOVO: lane fields + cooldown/grace
+        self._garantir_campos_lane()
+        if self.cooldown_mudanca_faixa > 0:
+            self.cooldown_mudanca_faixa -= 1
+        if self.frames_pos_troca > 0:
+            self.frames_pos_troca -= 1
 
-        Args:
-            dt: Delta time para cálculos de física
-            todos_veiculos: Lista de todos os veículos para verificação de colisão
-            malha: MalhaViaria para aplicar o fator de 'caos' (limite local de velocidade)
-        """
-        # métricas (igual ao seu)
+        # métricas
         self.tempo_viagem += dt
         if self.velocidade < 0.1:
             self.tempo_parado += dt
@@ -227,15 +433,16 @@ class Veiculo:
         else:
             self.parado = False
 
-        # aplica aceleração
+        # aceleração
         self.velocidade += self.aceleracao_atual * dt
 
-        # >>> limite de velocidade com fator local (CAOS)
+        # limite local (CAOS)
         fator = malha.obter_fator_caos(self) if malha is not None else 1.0
         vmax_local = CONFIG.VELOCIDADE_MAX_VEICULO * fator
+        self.vmax_local_atual = vmax_local
         self.velocidade = max(CONFIG.VELOCIDADE_MIN_VEICULO, min(vmax_local, self.velocidade))
 
-        # colisão futura (igual ao seu)
+        # colisão futura
         if todos_veiculos and self.velocidade > 0:
             if self.verificar_colisao_futura(todos_veiculos):
                 self.velocidade = 0
@@ -243,8 +450,8 @@ class Veiculo:
                 self._atualizar_rect()
                 return
 
-        # movimento (igual ao seu)
-        dx, dy = 0, 0
+        # movimento
+        dx, dy = 0.0, 0.0
         if self.direcao == Direcao.NORTE:
             dy = self.velocidade
         elif self.direcao == Direcao.LESTE:
@@ -253,16 +460,19 @@ class Veiculo:
         self.posicao[0] += dx
         self.posicao[1] += dy
         self.distancia_percorrida += math.sqrt(dx ** 2 + dy ** 2)
-
         self._atualizar_rect()
 
-        # saída da tela (igual ao seu)
-        margem = 100
-        if (self.posicao[0] < -margem or
-                self.posicao[0] > CONFIG.LARGURA_TELA + margem or
-                self.posicao[1] < -margem or
-                self.posicao[1] > CONFIG.ALTURA_TELA + margem):
-            self.ativo = False
+        # NOVO: saída da tela com margens direcionais (lateral mais tolerante)
+        margem_long = 100
+        margem_lat = max(CONFIG.LARGURA_RUA, 80)
+        if self.direcao == Direcao.LESTE:
+            if (self.posicao[0] < -margem_long or self.posicao[0] > CONFIG.LARGURA_TELA + margem_long or
+                    self.posicao[1] < -margem_lat or self.posicao[1] > CONFIG.ALTURA_TELA + margem_lat):
+                self.ativo = False
+        else:  # NORTE
+            if (self.posicao[1] < -margem_long or self.posicao[1] > CONFIG.ALTURA_TELA + margem_long or
+                    self.posicao[0] < -margem_lat or self.posicao[0] > CONFIG.LARGURA_TELA + margem_lat):
+                self.ativo = False
 
     def processar_semaforo(self, semaforo: Semaforo, posicao_parada: Tuple[float, float]) -> None:
         """
@@ -427,17 +637,27 @@ class Veiculo:
         return float('inf')
     
     def _mesma_via(self, outro: 'Veiculo') -> bool:
-        """Verifica se dois veículos estão na mesma via - MÃO ÚNICA."""
-        tolerancia = CONFIG.LARGURA_RUA * 0.8
-        
-        if self.direcao == Direcao.NORTE:
-            # Mesma via vertical
-            return abs(self.posicao[0] - outro.posicao[0]) < tolerancia
-        elif self.direcao == Direcao.LESTE:
-            # Mesma via horizontal
-            return abs(self.posicao[1] - outro.posicao[1]) < tolerancia
-        
-        return False
+        """
+        Dois veículos compartilham a mesma via se:
+        - têm a mesma DIREÇÃO,
+        - estão na MESMA LINHA (horizontais) ou MESMA COLUNA (verticais) da grade,
+        - e têm o MESMO indice_faixa.
+        """
+        if self.direcao != outro.direcao:
+            return False
+        if self.indice_faixa != outro.indice_faixa:
+            return False
+
+        # Identifica linha/coluna da via
+        if self.direcao == Direcao.LESTE:
+            linha_self = round((self.posicao[1] - CONFIG.POSICAO_INICIAL_Y) / CONFIG.ESPACAMENTO_VERTICAL)
+            linha_out = round((outro.posicao[1] - CONFIG.POSICAO_INICIAL_Y) / CONFIG.ESPACAMENTO_VERTICAL)
+            return linha_self == linha_out
+        else:  # Direcao.NORTE
+            col_self = round((self.posicao[0] - CONFIG.POSICAO_INICIAL_X) / CONFIG.ESPACAMENTO_HORIZONTAL)
+            col_out  = round((outro.posicao[0] - CONFIG.POSICAO_INICIAL_X) / CONFIG.ESPACAMENTO_HORIZONTAL)
+            return col_self == col_out
+
     
     def _calcular_velocidade_segura(self, distancia: float, velocidade_lider: float) -> float:
         """Calcula a velocidade segura baseada na distância e velocidade do veículo à frente."""

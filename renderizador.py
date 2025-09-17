@@ -36,7 +36,27 @@ class Renderizador:
         self.superficie_fundo = self._criar_fundo()
         self.painel_info = None
         self.ultima_atualizacao_painel = 0
-    
+
+    @staticmethod
+    def _linha_tracejada(surface, cor, start_pos, end_pos, dash_length=14, gap_length=10, width=2):
+        import math
+        x1, y1 = start_pos
+        x2, y2 = end_pos
+        dx = x2 - x1
+        dy = y2 - y1
+        dist = math.hypot(dx, dy)
+        if dist == 0:
+            return
+        vx = dx / dist
+        vy = dy / dist
+        n_dashes = int(dist // (dash_length + gap_length)) + 1
+        for i in range(n_dashes):
+            sx = x1 + (dash_length + gap_length) * i * vx
+            sy = y1 + (dash_length + gap_length) * i * vy
+            ex = sx + dash_length * vx
+            ey = sy + dash_length * vy
+            pygame.draw.line(surface, cor, (sx, sy), (ex, ey), width)
+
     def _criar_icone(self) -> pygame.Surface:
         """Cria um ícone para a janela."""
         icone = pygame.Surface((32, 32))
@@ -350,54 +370,80 @@ class Renderizador:
             self.desenhar_veiculo(tela, veiculo)
 
     def _desenhar_ruas(self, tela: pygame.Surface, malha: MalhaViaria) -> None:
-        """Desenha as ruas da malha com mão única (e overlay opcional do CAOS)."""
-        # Desenha ruas horizontais (Leste→Oeste)
+        """Desenha as ruas da malha com múltiplas faixas, setas e (opcional) overlay do CAOS."""
+        # ---- Ruas horizontais (fluxo Leste → Oeste) ----
         for linha in range(malha.linhas):
-            y = CONFIG.POSICAO_INICIAL_Y + linha * CONFIG.ESPACAMENTO_VERTICAL
+            yc = CONFIG.POSICAO_INICIAL_Y + linha * CONFIG.ESPACAMENTO_VERTICAL
+            y_top = int(yc - CONFIG.LARGURA_RUA // 2)
+            y_bot = int(yc + CONFIG.LARGURA_RUA // 2)
 
             # Fundo da rua
-            pygame.draw.rect(tela, CONFIG.CINZA_ESCURO,
-                           (0, y - CONFIG.LARGURA_RUA // 2,
-                            CONFIG.LARGURA_TELA, CONFIG.LARGURA_RUA))
+            pygame.draw.rect(
+                tela,
+                CONFIG.CINZA_ESCURO,
+                (0, y_top, CONFIG.LARGURA_TELA, int(CONFIG.LARGURA_RUA))
+            )
 
-            # Desenha indicadores de direção
-            self._desenhar_setas_horizontais(tela, y, Direcao.LESTE, malha)
+            # Indicadores de direção (setas)
+            self._desenhar_setas_horizontais(tela, yc, Direcao.LESTE, malha)
 
-            # Bordas da rua (sem linha central)
-            pygame.draw.line(tela, CONFIG.BRANCO,
-                           (0, y - CONFIG.LARGURA_RUA // 2),
-                           (CONFIG.LARGURA_TELA, y - CONFIG.LARGURA_RUA // 2), 2)
-            pygame.draw.line(tela, CONFIG.BRANCO,
-                           (0, y + CONFIG.LARGURA_RUA // 2),
-                           (CONFIG.LARGURA_TELA, y + CONFIG.LARGURA_RUA // 2), 2)
+            # Bordas da rua (superior e inferior)
+            pygame.draw.line(tela, CONFIG.BRANCO, (0, y_top), (CONFIG.LARGURA_TELA, y_top), 2)
+            pygame.draw.line(tela, CONFIG.BRANCO, (0, y_bot), (CONFIG.LARGURA_TELA, y_bot), 2)
+
+            # Divisórias de faixa (tracejadas) — internas
+            for i in range(1, CONFIG.FAIXAS_POR_VIA):
+                y_linha = yc - CONFIG.LARGURA_RUA / 2.0 + i * CONFIG.LARGURA_FAIXA
+                self._linha_tracejada(
+                    tela,
+                    CONFIG.BRANCO,
+                    (0, int(y_linha)),
+                    (CONFIG.LARGURA_TELA, int(y_linha)),
+                    dash_length=18,
+                    gap_length=12,
+                    width=2
+                )
 
             # Overlay do "caos" (opcional)
             if CONFIG.CHAOS_MOSTRAR:
-                self._desenhar_overlay_caos_horizontal(tela, y, malha, linha)
+                self._desenhar_overlay_caos_horizontal(tela, yc, malha, linha)
 
-        # Desenha ruas verticais (Norte→Sul)
+        # ---- Ruas verticais (fluxo Norte → Sul) ----
         for coluna in range(malha.colunas):
-            x = CONFIG.POSICAO_INICIAL_X + coluna * CONFIG.ESPACAMENTO_HORIZONTAL
+            xc = CONFIG.POSICAO_INICIAL_X + coluna * CONFIG.ESPACAMENTO_HORIZONTAL
+            x_left = int(xc - CONFIG.LARGURA_RUA // 2)
+            x_right = int(xc + CONFIG.LARGURA_RUA // 2)
 
             # Fundo da rua
-            pygame.draw.rect(tela, CONFIG.CINZA_ESCURO,
-                           (x - CONFIG.LARGURA_RUA // 2, 0,
-                            CONFIG.LARGURA_RUA, CONFIG.ALTURA_TELA))
+            pygame.draw.rect(
+                tela,
+                CONFIG.CINZA_ESCURO,
+                (x_left, 0, int(CONFIG.LARGURA_RUA), CONFIG.ALTURA_TELA)
+            )
 
-            # Desenha indicadores de direção
-            self._desenhar_setas_verticais(tela, x, Direcao.NORTE, malha)
+            # Indicadores de direção (setas)
+            self._desenhar_setas_verticais(tela, xc, Direcao.NORTE, malha)
 
-            # Bordas da rua (sem linha central)
-            pygame.draw.line(tela, CONFIG.BRANCO,
-                           (x - CONFIG.LARGURA_RUA // 2, 0),
-                           (x - CONFIG.LARGURA_RUA // 2, CONFIG.ALTURA_TELA), 2)
-            pygame.draw.line(tela, CONFIG.BRANCO,
-                           (x + CONFIG.LARGURA_RUA // 2, 0),
-                           (x + CONFIG.LARGURA_RUA // 2, CONFIG.ALTURA_TELA), 2)
+            # Bordas da rua (esquerda e direita)
+            pygame.draw.line(tela, CONFIG.BRANCO, (x_left, 0), (x_left, CONFIG.ALTURA_TELA), 2)
+            pygame.draw.line(tela, CONFIG.BRANCO, (x_right, 0), (x_right, CONFIG.ALTURA_TELA), 2)
+
+            # Divisórias de faixa (tracejadas) — internas
+            for i in range(1, CONFIG.FAIXAS_POR_VIA):
+                x_linha = xc - CONFIG.LARGURA_RUA / 2.0 + i * CONFIG.LARGURA_FAIXA
+                self._linha_tracejada(
+                    tela,
+                    CONFIG.BRANCO,
+                    (int(x_linha), 0),
+                    (int(x_linha), CONFIG.ALTURA_TELA),
+                    dash_length=18,
+                    gap_length=12,
+                    width=2
+                )
 
             # Overlay do "caos" (opcional)
             if CONFIG.CHAOS_MOSTRAR:
-                self._desenhar_overlay_caos_vertical(tela, x, malha, coluna)
+                self._desenhar_overlay_caos_vertical(tela, xc, malha, coluna)
 
     def _desenhar_setas_horizontais(self, tela: pygame.Surface, y: float, direcao: Direcao, malha: MalhaViaria) -> None:
         """Desenha setas indicando a direção do fluxo horizontal."""

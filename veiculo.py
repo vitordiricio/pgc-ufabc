@@ -393,7 +393,7 @@ class Veiculo:
     
     def _passou_da_linha(self, ponto: Tuple[float, float]) -> bool:
         """Verifica se o veículo já passou de um ponto - MÃO ÚNICA."""
-        margem = 10
+        margem = 5
         if self.direcao == Direcao.NORTE:
             # Norte→Sul: passou se Y atual > Y do ponto
             return self.posicao[1] > ponto[1] + margem

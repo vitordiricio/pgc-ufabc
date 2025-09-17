@@ -2,8 +2,7 @@
 Módulo de semáforo com suporte a múltiplas heurísticas de controle.
 Sistema com vias de mão única: Horizontal (Leste→Oeste) e Vertical (Norte→Sul)
 """
-from typing import Tuple, Dict, List, Optional
-from enum import Enum
+from typing import Tuple, Dict, Optional
 from configuracao import CONFIG, EstadoSemaforo, Direcao, TipoHeuristica
 
 

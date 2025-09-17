@@ -1,5 +1,5 @@
-"""
-Módulo principal de simulação com suporte a múltiplas heurísticas e análise de desempenho.
+"""ltiplas heu
+Módulo principal de simulação com suporte a múrísticas e análise de desempenho.
 """
 import pygame
 import json

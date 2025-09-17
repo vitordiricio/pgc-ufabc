@@ -35,14 +35,23 @@ class TipoHeuristica(Enum):
 class Configuracao:
     """Configuração para a simulação com vias de mão única."""
     # Configurações de tela
-    LARGURA_TELA: int = 1400
-    ALTURA_TELA: int = 900
+    LARGURA_TELA: int = 1920    
+    ALTURA_TELA: int = 1080
     FPS: int = 60
     
     # Configurações da grade de cruzamentos
-    LINHAS_GRADE: int = 2
-    COLUNAS_GRADE: int = 2
-    ESPACAMENTO_ENTRE_CRUZAMENTOS: int = 200
+    LINHAS_GRADE: int = 3
+    COLUNAS_GRADE: int =3
+    
+    @property
+    def ESPACAMENTO_HORIZONTAL(self) -> int:
+        """Espaçamento horizontal entre cruzamentos baseado na largura da tela."""
+        return self.LARGURA_TELA // self.COLUNAS_GRADE
+    
+    @property
+    def ESPACAMENTO_VERTICAL(self) -> int:
+        """Espaçamento vertical entre cruzamentos baseado na altura da tela."""
+        return self.ALTURA_TELA // self.LINHAS_GRADE
     
     # Cores
     PRETO: tuple[int, int, int] = (20, 20, 20)
@@ -157,13 +166,13 @@ class Configuracao:
     @property
     def POSICAO_INICIAL_X(self) -> int:
         """Calcula a posição X inicial dinamicamente."""
-        largura_total = (self.COLUNAS_GRADE - 1) * self.ESPACAMENTO_ENTRE_CRUZAMENTOS
+        largura_total = (self.COLUNAS_GRADE - 1) * self.ESPACAMENTO_HORIZONTAL
         return (self.LARGURA_TELA - largura_total) // 2
     
     @property
     def POSICAO_INICIAL_Y(self) -> int:
         """Calcula a posição Y inicial dinamicamente."""
-        altura_total = (self.LINHAS_GRADE - 1) * self.ESPACAMENTO_ENTRE_CRUZAMENTOS
+        altura_total = (self.LINHAS_GRADE - 1) * self.ESPACAMENTO_VERTICAL
         return (self.ALTURA_TELA - altura_total) // 2 + 50
 
 

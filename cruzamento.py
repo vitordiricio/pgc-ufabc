@@ -168,111 +168,102 @@ class Cruzamento:
     # ATUALIZAÇÃO (com anticolisão H×V + faixas)
     # =========================
     def atualizar_veiculos(self, todos_veiculos: List[Veiculo]) -> None:
-        """Atualiza o estado dos veículos no cruzamento com múltiplas faixas e anticolisão H×V."""
-        # 1) Limpa listas do quadro anterior
+        """Atualiza o estado dos veículos no cruzamento, com lock de interseção por direção."""
+        # 1) Limpa listas antigas deste cruzamento
         for direcao in CONFIG.DIRECOES_PERMITIDAS:
             self.veiculos_por_direcao[direcao] = []
 
-        # 2) Recoleta veículos próximos deste cruzamento
-        veiculos_proximos = []
-        for veiculo in todos_veiculos:
-            if veiculo.direcao in CONFIG.DIRECOES_PERMITIDAS and self._veiculo_proximo_ao_cruzamento(veiculo):
-                cruz_atual = self._determinar_cruzamento_veiculo(veiculo)
-                if cruz_atual == self.id:
-                    veiculo.resetar_controle_semaforo(self.id)
-                    self.veiculos_por_direcao[veiculo.direcao].append(veiculo)
-                    veiculos_proximos.append(veiculo)
+        # 2) Reclassifica veículos deste cruzamento
+        veiculos_proximos: List[Veiculo] = []
+        for v in todos_veiculos:
+            if v.direcao in CONFIG.DIRECOES_PERMITIDAS and self._veiculo_proximo_ao_cruzamento(v):
+                c_id = self._determinar_cruzamento_veiculo(v)
+                if c_id == self.id:
+                    v.resetar_controle_semaforo(self.id)
+                    self.veiculos_por_direcao[v.direcao].append(v)
+                    veiculos_proximos.append(v)
 
-        # 3) Ocupação do miolo
-        margem = 6.0
-        left, right = self.limites['esquerda'] - margem, self.limites['direita'] + margem
-        top, bottom = self.limites['topo'] - margem, self.limites['base'] + margem
+        # 3) Ocupação atual da interseção (quem já está dentro)
+        left = self.limites['esquerda']
+        right = self.limites['direita']
+        top = self.limites['topo']
+        base = self.limites['base']
 
-        def dentro_miolo(v: Veiculo) -> bool:
-            x, y = v.posicao
-            return (left <= x <= right) and (top <= y <= bottom)
+        def dentro_intersec(veh: Veiculo) -> bool:
+            x, y = veh.posicao
+            return (left <= x <= right) and (top <= y <= base)
 
-        ocupado_por_horizontal = any(v.ativo and v.direcao == Direcao.LESTE and dentro_miolo(v) for v in todos_veiculos)
-        ocupado_por_vertical   = any(v.ativo and v.direcao == Direcao.NORTE and dentro_miolo(v) for v in todos_veiculos)
+        ocup = {Direcao.NORTE: 0, Direcao.LESTE: 0}
+        for v in veiculos_proximos:
+            inside = dentro_intersec(v)
+            v.no_cruzamento = inside
+            if inside:
+                ocup[v.direcao] += 1
 
-        # 4) Processa por direção
+        # 4) Processa veículos por direção
+        semaforos = self.gerenciador_semaforos.semaforos.get(self.id, {})
+
         for direcao in CONFIG.DIRECOES_PERMITIDAS:
             veics = self.veiculos_por_direcao.get(direcao, [])
             if not veics:
                 continue
 
-            # Particiona por faixa e ordena
-            faixas: Dict[int, List[Veiculo]] = {}
-            for v in veics:
-                idx = getattr(v, "indice_faixa", 0)
-                faixas.setdefault(idx, []).append(v)
+            veics_ordenados = self._ordenar_veiculos_por_posicao(veics, direcao)
+            semaforo = semaforos.get(direcao, None)
+            oposta = Direcao.LESTE if direcao == Direcao.NORTE else Direcao.NORTE
 
-            for idx_faixa, lista in faixas.items():
-                if direcao == Direcao.NORTE:
-                    lista.sort(key=lambda v: v.posicao[1], reverse=True)
+            for v in veics_ordenados:
+                # Car-following global
+                v.processar_todos_veiculos(todos_veiculos)
+
+                # Posição da linha de parada (se houver semáforo)
+                pos_parada = semaforo.obter_posicao_parada() if semaforo else None
+
+                # Estado antes de atualizar (para detectar entrada/saída da caixa)
+                estava_dentro = dentro_intersec(v)
+                antes_da_linha = False
+                if semaforo and pos_parada is not None:
+                    # Só "antes da linha" se ainda não entrou no box
+                    antes_da_linha = (not estava_dentro) and self._veiculo_antes_da_linha(v, pos_parada)
+
+                # 4a) BLOQUEIO da direção oposta: se a outra direção está dentro, não deixamos entrar
+                if antes_da_linha and ocup.get(oposta, 0) > 0:
+                    # Trate como vermelho: pare antes da linha
+                    dist = v._calcular_distancia_ate_ponto(pos_parada)
+                    v._aplicar_frenagem_para_parada(dist)
+                    v.aguardando_semaforo = True
                 else:
-                    lista.sort(key=lambda v: v.posicao[0], reverse=True)
+                    # 4b) Semáforo normal
+                    if semaforo and pos_parada is not None:
+                        # Só processa semáforo se ainda não estiver no box
+                        if not estava_dentro:
+                            v.processar_semaforo(semaforo, pos_parada)
 
-            # Semáforo desta direção
-            sems = self.gerenciador_semaforos.semaforos.get(self.id, {})
-            semaforo = sems.get(direcao)
+                # 4c) Atualiza física (com colisão e caos)
+                v.atualizar(1.0, todos_veiculos, self.malha)
 
-            def eh_lider(v: Veiculo) -> bool:
-                idx = getattr(v, "indice_faixa", 0)
-                lista = faixas.get(idx, [])
-                if not lista:
-                    return True
-                return v is lista[0]
+                # 4d) Detecta transições (entrou / saiu do box) e atualiza lock
+                agora_dentro = dentro_intersec(v)
 
-            for idx_faixa, lista in faixas.items():
-                for veic in lista:
-                    # Interações globais (car-following + MOBIL-lite)
-                    veic.processar_todos_veiculos(todos_veiculos)
+                if (not estava_dentro) and agora_dentro:
+                    v.no_cruzamento = True
+                    ocup[direcao] = ocup.get(direcao, 0) + 1
+                    # Ao entrar, não deixar o carro frear por semáforo
+                    v.aguardando_semaforo = False
+                    v.pode_passar_amarelo = False
 
-                    # Semáforo antes da linha
-                    if semaforo:
-                        posicao_parada = semaforo.obter_posicao_parada()
-                        if self._veiculo_antes_da_linha(veic, posicao_parada):
-                            veic.processar_semaforo(semaforo, posicao_parada)
+                elif estava_dentro and (not agora_dentro):
+                    v.no_cruzamento = False
+                    if ocup.get(direcao, 0) > 0:
+                        ocup[direcao] -= 1
 
-                    # Gate do miolo (só líder da faixa, antes da linha)
-                    precisa_gate = False
-                    if eh_lider(veic):
-                        if semaforo:
-                            posicao_parada = semaforo.obter_posicao_parada()
-                            antes_da_linha = self._veiculo_antes_da_linha(veic, posicao_parada)
-                        else:
-                            antes_da_linha = not dentro_miolo(veic)
+                # 4e) Métricas de espera
+                if v.parado and v.aguardando_semaforo:
+                    self.estatisticas['tempo_espera_acumulado'] += 1
 
-                        if antes_da_linha:
-                            if veic.direcao == Direcao.LESTE and ocupado_por_vertical:
-                                precisa_gate = True
-                            elif veic.direcao == Direcao.NORTE and ocupado_por_horizontal:
-                                precisa_gate = True
-
-                    if precisa_gate:
-                        if semaforo:
-                            dist = veic._calcular_distancia_ate_ponto(semaforo.obter_posicao_parada())
-                        else:
-                            dist = max(
-                                0.0,
-                                (self.centro_x - veic.posicao[0]) if veic.direcao == Direcao.LESTE
-                                else (self.centro_y - veic.posicao[1])
-                            )
-                        veic._aplicar_frenagem_para_parada(dist)
-                        veic.aguardando_semaforo = True
-
-                    # Atualiza física
-                    veic.atualizar(1.0, todos_veiculos, self.malha)
-                    veic.no_cruzamento = dentro_miolo(veic)
-
-                    if veic.parado and veic.aguardando_semaforo:
-                        self.estatisticas['tempo_espera_acumulado'] += 1
-
-        # 5) Densidade
+        # 5) Atualiza densidade (veículos visíveis/associados a este cruzamento)
         self.estatisticas['densidade_atual'] = sum(
-            len(self.veiculos_por_direcao.get(d, []))
-            for d in CONFIG.DIRECOES_PERMITIDAS
+            len(self.veiculos_por_direcao.get(d, [])) for d in CONFIG.DIRECOES_PERMITIDAS
         )
 
 

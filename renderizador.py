@@ -61,6 +61,37 @@ class Renderizador:
             ey = sy + dash_length * vy
             pygame.draw.line(surface, cor, (sx, sy), (ex, ey), width)
 
+    def desenhar_mensagem(self, mensagem: str, cor: Tuple[int, int, int] = None) -> None:
+        """
+        Desenha uma mensagem temporária no centro da tela.
+
+        Args:
+            mensagem: Texto da mensagem
+            cor: Cor da mensagem (default: branco)
+        """
+        if not mensagem:
+            return
+
+        if cor is None:
+            cor = CONFIG.BRANCO
+
+        # Renderiza o texto
+        superficie_msg = self.fontes['grande'].render(mensagem, True, cor)
+        rect_msg = superficie_msg.get_rect(
+            center=(CONFIG.LARGURA_TELA // 2, CONFIG.ALTURA_TELA // 2)
+        )
+
+        # Fundo semi-transparente
+        superficie_fundo = pygame.Surface((rect_msg.width + 40, rect_msg.height + 20))
+        superficie_fundo.set_alpha(180)
+        superficie_fundo.fill(CONFIG.PRETO)
+
+        rect_fundo = superficie_fundo.get_rect(center=rect_msg.center)
+
+        # Desenha na tela
+        self.tela.blit(superficie_fundo, rect_fundo)
+        self.tela.blit(superficie_msg, rect_msg)
+
     def _criar_icone(self) -> pygame.Surface:
         icone = pygame.Surface((32, 32))
         icone.fill(CONFIG.PRETO)

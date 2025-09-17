@@ -4,7 +4,6 @@ Sistema com vias de mão única: Horizontal (Leste→Oeste) e Vertical (Norte→
 """
 from typing import Tuple, Dict, List, Optional
 from enum import Enum
-import pygame
 from configuracao import CONFIG, EstadoSemaforo, Direcao, TipoHeuristica
 
 
@@ -128,69 +127,6 @@ class Semaforo:
         
         return self.posicao
     
-    def desenhar(self, tela: pygame.Surface) -> None:
-        """Desenha o semáforo na tela com visual aprimorado - MÃO ÚNICA."""
-        # Dimensões da caixa do semáforo
-        largura = CONFIG.TAMANHO_SEMAFORO * 3 + CONFIG.ESPACAMENTO_SEMAFORO * 2
-        altura = CONFIG.TAMANHO_SEMAFORO + 8
-
-
-        
-        # Posição da caixa - ajustada para mão única
-        if self.direcao == Direcao.NORTE:
-            # Semáforo horizontal para tráfego vertical
-            rect_caixa = pygame.Rect(
-                self.posicao[0] - largura // 2,
-                self.posicao[1] - altura // 2,
-                largura, altura
-            )
-        else:  # Direcao.LESTE
-            # Semáforo vertical para tráfego horizontal
-            rect_caixa = pygame.Rect(
-                self.posicao[0] - altura // 2,
-                self.posicao[1] - largura // 2,
-                altura, largura
-            )
-        
-        # Desenha a caixa do semáforo
-        pygame.draw.rect(tela, CONFIG.PRETO, rect_caixa, border_radius=4)
-        pygame.draw.rect(tela, CONFIG.CINZA_ESCURO, rect_caixa, 2, border_radius=4)
-        
-        # Cores das luzes
-        cores = {
-            EstadoSemaforo.VERMELHO: CONFIG.VERMELHO if self.estado == EstadoSemaforo.VERMELHO else (60, 20, 20),
-            EstadoSemaforo.AMARELO: CONFIG.AMARELO if self.estado == EstadoSemaforo.AMARELO else (60, 60, 20),
-            EstadoSemaforo.VERDE: CONFIG.VERDE if self.estado == EstadoSemaforo.VERDE else (20, 60, 20)
-        }
-        
-        # Desenha as luzes
-        raio = CONFIG.TAMANHO_SEMAFORO // 2 - 1
-        
-        if self.direcao == Direcao.NORTE:
-            # Semáforo horizontal
-            x_base = rect_caixa.x + CONFIG.TAMANHO_SEMAFORO // 2 + 4
-            y_centro = rect_caixa.centery
-            
-            for i, (estado, cor) in enumerate(cores.items()):
-                x = x_base + i * (CONFIG.TAMANHO_SEMAFORO + CONFIG.ESPACAMENTO_SEMAFORO)
-                pygame.draw.circle(tela, cor, (x, y_centro), raio)
-                
-                # Adiciona brilho se a luz estiver ativa
-                if self.estado == estado:
-                    pygame.draw.circle(tela, cor, (x, y_centro), raio - 2, 2)
-        else:  # Direcao.LESTE
-            # Semáforo vertical
-            x_centro = rect_caixa.centerx
-            y_base = rect_caixa.y + CONFIG.TAMANHO_SEMAFORO // 2 + 4
-            
-            for i, (estado, cor) in enumerate(cores.items()):
-                y = y_base + i * (CONFIG.TAMANHO_SEMAFORO + CONFIG.ESPACAMENTO_SEMAFORO)
-                pygame.draw.circle(tela, cor, (x_centro, y), raio)
-                
-                # Adiciona brilho se a luz estiver ativa
-                if self.estado == estado:
-                    pygame.draw.circle(tela, cor, (x_centro, y), raio - 2, 2)
-        self._click_rect = rect_caixa.inflate(8, 8)
 
 
 class GerenciadorSemaforos:

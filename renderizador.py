@@ -1,10 +1,14 @@
 """
 Módulo de renderização aprimorado para a simulação de malha viária urbana.
+Centraliza todas as responsabilidades visuais do sistema.
 """
 import pygame
+import math
 from typing import Dict, List, Tuple
-from configuracao import CONFIG, TipoHeuristica
-from cruzamento import MalhaViaria
+from configuracao import CONFIG, Direcao, EstadoSemaforo
+from cruzamento import MalhaViaria, Cruzamento
+from veiculo import Veiculo
+from semaforo import Semaforo
 
 
 class Renderizador:
@@ -69,8 +73,8 @@ class Renderizador:
         # Desenha o fundo
         self.tela.blit(self.superficie_fundo, (0, 0))
         
-        # Desenha a malha viária
-        malha.desenhar(self.tela)
+        # Desenha a malha viária usando métodos centralizados
+        self.desenhar_malha_viaria(self.tela, malha)
         
         # Desenha painéis de informação
         self._desenhar_painel_superior(malha)
@@ -274,3 +278,363 @@ class Renderizador:
     def obter_fps(self) -> float:
         """Retorna o FPS atual."""
         return self.relogio.get_fps()
+    
+    # ========================================
+    # MÉTODOS DE RENDERIZAÇÃO DE CRUZAMENTOS
+    # ========================================
+    
+    def desenhar_cruzamento(self, tela: pygame.Surface, cruzamento: Cruzamento) -> None:
+        """Desenha um cruzamento e seus elementos."""
+        # Desenha área do cruzamento
+        area_cruzamento = pygame.Rect(
+            cruzamento.limites['esquerda'],
+            cruzamento.limites['topo'],
+            cruzamento.largura_rua,
+            cruzamento.largura_rua
+        )
+        pygame.draw.rect(tela, CONFIG.CINZA, area_cruzamento)
+
+        # Desenha linhas de parada apenas para direções permitidas
+        self._desenhar_linhas_parada(tela, cruzamento)
+
+        # Desenha semáforos
+        semaforos = cruzamento.gerenciador_semaforos.semaforos.get(cruzamento.id, {})
+        for semaforo in semaforos.values():
+            self.desenhar_semaforo(tela, semaforo)
+
+        # Desenha informações debug
+        if CONFIG.MOSTRAR_INFO_VEICULO:
+            self._desenhar_info_debug_cruzamento(tela, cruzamento)
+
+    def _desenhar_linhas_parada(self, tela: pygame.Surface, cruzamento: Cruzamento) -> None:
+        """Desenha as linhas de parada apenas para direções de mão única."""
+        cor_linha = CONFIG.BRANCO
+        largura_linha = 3
+
+        # Linha Norte (horizontal, antes do cruzamento vindo de cima)
+        pygame.draw.line(tela,
+                        cor_linha,
+                        (cruzamento.limites['esquerda'], cruzamento.limites['topo'] - 20),
+                        (cruzamento.limites['direita'], cruzamento.limites['topo'] - 20),
+                        largura_linha)
+
+        # Linha Leste (vertical, antes do cruzamento vindo da esquerda)
+        pygame.draw.line(tela,
+                        cor_linha,
+                        (cruzamento.limites['esquerda'] - 20, cruzamento.limites['topo']),
+                        (cruzamento.limites['esquerda'] - 20, cruzamento.limites['base']),
+                        largura_linha)
+
+    def _desenhar_info_debug_cruzamento(self, tela: pygame.Surface, cruzamento: Cruzamento) -> None:
+        """Desenha informações de debug do cruzamento."""
+        fonte = pygame.font.SysFont('Arial', 12)
+        texto = f"C({cruzamento.id[0]},{cruzamento.id[1]}) D:{cruzamento.estatisticas['densidade_atual']}"
+        superficie = fonte.render(texto, True, CONFIG.BRANCO)
+        tela.blit(superficie, (cruzamento.centro_x - 30, cruzamento.centro_y - 10))
+
+    # ========================================
+    # MÉTODOS DE RENDERIZAÇÃO DE MALHA VIÁRIA
+    # ========================================
+    
+    def desenhar_malha_viaria(self, tela: pygame.Surface, malha: MalhaViaria) -> None:
+        """Desenha toda a malha viária."""
+        # Desenha as ruas
+        self._desenhar_ruas(tela, malha)
+
+        # Desenha os cruzamentos
+        for cruzamento in malha.cruzamentos.values():
+            self.desenhar_cruzamento(tela, cruzamento)
+
+        # Desenha os veículos
+        for veiculo in malha.veiculos:
+            self.desenhar_veiculo(tela, veiculo)
+
+    def _desenhar_ruas(self, tela: pygame.Surface, malha: MalhaViaria) -> None:
+        """Desenha as ruas da malha com mão única (e overlay opcional do CAOS)."""
+        # Desenha ruas horizontais (Leste→Oeste)
+        for linha in range(malha.linhas):
+            y = CONFIG.POSICAO_INICIAL_Y + linha * CONFIG.ESPACAMENTO_VERTICAL
+
+            # Fundo da rua
+            pygame.draw.rect(tela, CONFIG.CINZA_ESCURO,
+                           (0, y - CONFIG.LARGURA_RUA // 2,
+                            CONFIG.LARGURA_TELA, CONFIG.LARGURA_RUA))
+
+            # Desenha indicadores de direção
+            self._desenhar_setas_horizontais(tela, y, Direcao.LESTE, malha)
+
+            # Bordas da rua (sem linha central)
+            pygame.draw.line(tela, CONFIG.BRANCO,
+                           (0, y - CONFIG.LARGURA_RUA // 2),
+                           (CONFIG.LARGURA_TELA, y - CONFIG.LARGURA_RUA // 2), 2)
+            pygame.draw.line(tela, CONFIG.BRANCO,
+                           (0, y + CONFIG.LARGURA_RUA // 2),
+                           (CONFIG.LARGURA_TELA, y + CONFIG.LARGURA_RUA // 2), 2)
+
+            # Overlay do "caos" (opcional)
+            if CONFIG.CHAOS_MOSTRAR:
+                self._desenhar_overlay_caos_horizontal(tela, y, malha, linha)
+
+        # Desenha ruas verticais (Norte→Sul)
+        for coluna in range(malha.colunas):
+            x = CONFIG.POSICAO_INICIAL_X + coluna * CONFIG.ESPACAMENTO_HORIZONTAL
+
+            # Fundo da rua
+            pygame.draw.rect(tela, CONFIG.CINZA_ESCURO,
+                           (x - CONFIG.LARGURA_RUA // 2, 0,
+                            CONFIG.LARGURA_RUA, CONFIG.ALTURA_TELA))
+
+            # Desenha indicadores de direção
+            self._desenhar_setas_verticais(tela, x, Direcao.NORTE, malha)
+
+            # Bordas da rua (sem linha central)
+            pygame.draw.line(tela, CONFIG.BRANCO,
+                           (x - CONFIG.LARGURA_RUA // 2, 0),
+                           (x - CONFIG.LARGURA_RUA // 2, CONFIG.ALTURA_TELA), 2)
+            pygame.draw.line(tela, CONFIG.BRANCO,
+                           (x + CONFIG.LARGURA_RUA // 2, 0),
+                           (x + CONFIG.LARGURA_RUA // 2, CONFIG.ALTURA_TELA), 2)
+
+            # Overlay do "caos" (opcional)
+            if CONFIG.CHAOS_MOSTRAR:
+                self._desenhar_overlay_caos_vertical(tela, x, malha, coluna)
+
+    def _desenhar_setas_horizontais(self, tela: pygame.Surface, y: float, direcao: Direcao, malha: MalhaViaria) -> None:
+        """Desenha setas indicando a direção do fluxo horizontal."""
+        if not CONFIG.MOSTRAR_DIRECAO_FLUXO:
+            return
+
+        # Desenha setas a cada intervalo
+        intervalo = 100
+        tamanho_seta = 15
+
+        for x in range(50, CONFIG.LARGURA_TELA, intervalo):
+            # Evita desenhar setas nos cruzamentos
+            perto_de_cruzamento = False
+            for coluna in range(malha.colunas):
+                x_cruzamento = CONFIG.POSICAO_INICIAL_X + coluna * CONFIG.ESPACAMENTO_HORIZONTAL
+                if abs(x - x_cruzamento) < CONFIG.LARGURA_RUA:
+                    perto_de_cruzamento = True
+                    break
+
+            if not perto_de_cruzamento:
+                # Desenha seta para direita (Leste→Oeste)
+                pontos = [
+                    (x - tamanho_seta, y - 5),
+                    (x - tamanho_seta, y + 5),
+                    (x, y)
+                ]
+                pygame.draw.polygon(tela, CONFIG.AMARELO, pontos)
+
+    def _desenhar_setas_verticais(self, tela: pygame.Surface, x: float, direcao: Direcao, malha: MalhaViaria) -> None:
+        """Desenha setas indicando a direção do fluxo vertical."""
+        if not CONFIG.MOSTRAR_DIRECAO_FLUXO:
+            return
+
+        # Desenha setas a cada intervalo
+        intervalo = 100
+        tamanho_seta = 15
+
+        for y in range(50, CONFIG.ALTURA_TELA, intervalo):
+            # Evita desenhar setas nos cruzamentos
+            perto_de_cruzamento = False
+            for linha in range(malha.linhas):
+                y_cruzamento = CONFIG.POSICAO_INICIAL_Y + linha * CONFIG.ESPACAMENTO_VERTICAL
+                if abs(y - y_cruzamento) < CONFIG.LARGURA_RUA:
+                    perto_de_cruzamento = True
+                    break
+
+            if not perto_de_cruzamento:
+                # Desenha seta para baixo (Norte→Sul)
+                pontos = [
+                    (x - 5, y - tamanho_seta),
+                    (x + 5, y - tamanho_seta),
+                    (x, y)
+                ]
+                pygame.draw.polygon(tela, CONFIG.AMARELO, pontos)
+
+    def _desenhar_overlay_caos_horizontal(self, tela: pygame.Surface, y: float, malha: MalhaViaria, linha: int) -> None:
+        """Desenha overlay do caos para ruas horizontais."""
+        seg = CONFIG.CHAOS_TAMANHO_SEGMENTO
+        y_top = y - CONFIG.LARGURA_RUA // 2
+        vetor = malha.caos_horizontal[linha]
+        for i, fator in enumerate(vetor):
+            x0 = i * seg
+            w = seg if x0 + seg <= CONFIG.LARGURA_TELA else CONFIG.LARGURA_TELA - x0
+            if w <= 0:
+                continue
+            surf = pygame.Surface((w, CONFIG.LARGURA_RUA), pygame.SRCALPHA)
+            # vermelho suave se <1; verde suave se >1
+            if fator < 1.0:
+                cor = (255, 80, 80, int((1.0 - fator) * 80))
+            else:
+                cor = (80, 255, 80, int((fator - 1.0) * 80))
+            surf.fill(cor)
+            tela.blit(surf, (x0, y_top))
+
+    def _desenhar_overlay_caos_vertical(self, tela: pygame.Surface, x: float, malha: MalhaViaria, coluna: int) -> None:
+        """Desenha overlay do caos para ruas verticais."""
+        seg = CONFIG.CHAOS_TAMANHO_SEGMENTO
+        x_left = x - CONFIG.LARGURA_RUA // 2
+        vetor = malha.caos_vertical[coluna]
+        for j, fator in enumerate(vetor):
+            y0 = j * seg
+            h = seg if y0 + seg <= CONFIG.ALTURA_TELA else CONFIG.ALTURA_TELA - y0
+            if h <= 0:
+                continue
+            surf = pygame.Surface((CONFIG.LARGURA_RUA, h), pygame.SRCALPHA)
+            if fator < 1.0:
+                cor = (255, 80, 80, int((1.0 - fator) * 80))
+            else:
+                cor = (80, 255, 80, int((fator - 1.0) * 80))
+            surf.fill(cor)
+            tela.blit(surf, (x_left, y0))
+
+    # ========================================
+    # MÉTODOS DE RENDERIZAÇÃO DE VEÍCULOS
+    # ========================================
+    
+    def desenhar_veiculo(self, tela: pygame.Surface, veiculo: Veiculo) -> None:
+        """Desenha o veículo na tela com visual aprimorado - MÃO ÚNICA."""
+        # Cria superfície para o veículo
+        if veiculo.direcao == Direcao.NORTE:
+            superficie = pygame.Surface((veiculo.largura, veiculo.altura), pygame.SRCALPHA)
+        else:  # Direcao.LESTE
+            superficie = pygame.Surface((veiculo.altura, veiculo.largura), pygame.SRCALPHA)
+        
+        # Desenha o corpo do veículo
+        pygame.draw.rect(superficie, veiculo.cor, superficie.get_rect(), border_radius=4)
+        
+        # Adiciona detalhes (janelas)
+        cor_janela = (200, 220, 255, 180)
+        if veiculo.direcao == Direcao.NORTE:
+            # Janela frontal (parte de baixo - direção do movimento)
+            pygame.draw.rect(superficie, cor_janela, 
+                           (3, veiculo.altura * 0.7, veiculo.largura - 6, veiculo.altura * 0.25), 
+                           border_radius=2)
+            # Janela traseira (parte de cima)
+            pygame.draw.rect(superficie, cor_janela, 
+                           (3, 3, veiculo.largura - 6, veiculo.altura * 0.3), 
+                           border_radius=2)
+        else:  # Direcao.LESTE
+            # Janela frontal (parte direita - direção do movimento)
+            pygame.draw.rect(superficie, cor_janela, 
+                           (veiculo.altura * 0.7, 3, veiculo.altura * 0.25, veiculo.largura - 6), 
+                           border_radius=2)
+            # Janela traseira (parte esquerda)
+            pygame.draw.rect(superficie, cor_janela, 
+                           (3, 3, veiculo.altura * 0.3, veiculo.largura - 6), 
+                           border_radius=2)
+        
+        # Adiciona luzes de freio se estiver freando
+        if veiculo.aceleracao_atual < -0.1:
+            cor_freio = (255, 100, 100)
+            if veiculo.direcao == Direcao.NORTE:
+                # Luzes na parte de cima (traseira)
+                pygame.draw.rect(superficie, cor_freio, (2, 1, 6, 3))
+                pygame.draw.rect(superficie, cor_freio, (veiculo.largura - 8, 1, 6, 3))
+            elif veiculo.direcao == Direcao.LESTE:
+                # Luzes na parte esquerda (traseira)
+                pygame.draw.rect(superficie, cor_freio, (1, 2, 3, 6))
+                pygame.draw.rect(superficie, cor_freio, (1, veiculo.largura - 8, 3, 6))
+        
+        # Adiciona faróis
+        cor_farol = (255, 255, 200, 150)
+        if veiculo.direcao == Direcao.NORTE:
+            # Faróis na frente (parte de baixo)
+            pygame.draw.circle(superficie, cor_farol, (8, veiculo.altura - 5), 3)
+            pygame.draw.circle(superficie, cor_farol, (veiculo.largura - 8, veiculo.altura - 5), 3)
+        elif veiculo.direcao == Direcao.LESTE:
+            # Faróis na frente (parte direita)
+            pygame.draw.circle(superficie, cor_farol, (veiculo.altura - 5, 8), 3)
+            pygame.draw.circle(superficie, cor_farol, (veiculo.altura - 5, veiculo.largura - 8), 3)
+        
+        # Desenha na tela
+        rect = superficie.get_rect(center=(int(veiculo.posicao[0]), int(veiculo.posicao[1])))
+        tela.blit(superficie, rect)
+        
+        # Debug info
+        if CONFIG.MOSTRAR_INFO_VEICULO:
+            self._desenhar_info_debug_veiculo(tela, veiculo)
+
+    def _desenhar_info_debug_veiculo(self, tela: pygame.Surface, veiculo: Veiculo) -> None:
+        """Desenha informações de debug do veículo."""
+        fonte = pygame.font.SysFont('Arial', 10)
+        # Adiciona indicador se está aguardando semáforo ou veículo
+        aguardando = ""
+        if veiculo.aguardando_semaforo:
+            aguardando = "🔴"
+        elif veiculo.veiculo_frente and veiculo.distancia_veiculo_frente < CONFIG.DISTANCIA_REACAO:
+            aguardando = "🚗"
+        
+        texto = f"V:{veiculo.velocidade:.1f} ID:{veiculo.id} {aguardando}"
+        superficie_texto = fonte.render(texto, True, CONFIG.BRANCO)
+        tela.blit(superficie_texto, (veiculo.posicao[0] - 20, veiculo.posicao[1] - 25))
+
+    # ========================================
+    # MÉTODOS DE RENDERIZAÇÃO DE SEMÁFOROS
+    # ========================================
+    
+    def desenhar_semaforo(self, tela: pygame.Surface, semaforo: Semaforo) -> None:
+        """Desenha o semáforo na tela com visual aprimorado - MÃO ÚNICA."""
+        # Dimensões da caixa do semáforo
+        largura = CONFIG.TAMANHO_SEMAFORO * 3 + CONFIG.ESPACAMENTO_SEMAFORO * 2
+        altura = CONFIG.TAMANHO_SEMAFORO + 8
+
+        # Posição da caixa - ajustada para mão única
+        if semaforo.direcao == Direcao.NORTE:
+            # Semáforo horizontal para tráfego vertical
+            rect_caixa = pygame.Rect(
+                semaforo.posicao[0] - largura // 2,
+                semaforo.posicao[1] - altura // 2,
+                largura, altura
+            )
+        else:  # Direcao.LESTE
+            # Semáforo vertical para tráfego horizontal
+            rect_caixa = pygame.Rect(
+                semaforo.posicao[0] - altura // 2,
+                semaforo.posicao[1] - largura // 2,
+                altura, largura
+            )
+        
+        # Desenha a caixa do semáforo
+        pygame.draw.rect(tela, CONFIG.PRETO, rect_caixa, border_radius=4)
+        pygame.draw.rect(tela, CONFIG.CINZA_ESCURO, rect_caixa, 2, border_radius=4)
+        
+        # Cores das luzes
+        cores = {
+            EstadoSemaforo.VERMELHO: CONFIG.VERMELHO if semaforo.estado == EstadoSemaforo.VERMELHO else (60, 20, 20),
+            EstadoSemaforo.AMARELO: CONFIG.AMARELO if semaforo.estado == EstadoSemaforo.AMARELO else (60, 60, 20),
+            EstadoSemaforo.VERDE: CONFIG.VERDE if semaforo.estado == EstadoSemaforo.VERDE else (20, 60, 20)
+        }
+        
+        # Desenha as luzes
+        raio = CONFIG.TAMANHO_SEMAFORO // 2 - 1
+        
+        if semaforo.direcao == Direcao.NORTE:
+            # Semáforo horizontal
+            x_base = rect_caixa.x + CONFIG.TAMANHO_SEMAFORO // 2 + 4
+            y_centro = rect_caixa.centery
+            
+            for i, (estado, cor) in enumerate(cores.items()):
+                x = x_base + i * (CONFIG.TAMANHO_SEMAFORO + CONFIG.ESPACAMENTO_SEMAFORO)
+                pygame.draw.circle(tela, cor, (x, y_centro), raio)
+                
+                # Adiciona brilho se a luz estiver ativa
+                if semaforo.estado == estado:
+                    pygame.draw.circle(tela, cor, (x, y_centro), raio - 2, 2)
+        else:  # Direcao.LESTE
+            # Semáforo vertical
+            x_centro = rect_caixa.centerx
+            y_base = rect_caixa.y + CONFIG.TAMANHO_SEMAFORO // 2 + 4
+            
+            for i, (estado, cor) in enumerate(cores.items()):
+                y = y_base + i * (CONFIG.TAMANHO_SEMAFORO + CONFIG.ESPACAMENTO_SEMAFORO)
+                pygame.draw.circle(tela, cor, (x_centro, y), raio)
+                
+                # Adiciona brilho se a luz estiver ativa
+                if semaforo.estado == estado:
+                    pygame.draw.circle(tela, cor, (x_centro, y), raio - 2, 2)
+        
+        # Define área clicável para modo manual
+        semaforo._click_rect = rect_caixa.inflate(8, 8)

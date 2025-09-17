@@ -5,7 +5,7 @@ import pygame
 import json
 import os
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict
 from configuracao import CONFIG, TipoHeuristica, Direcao, EstadoSemaforo
 from cruzamento import MalhaViaria
 from renderizador import Renderizador

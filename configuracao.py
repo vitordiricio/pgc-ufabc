@@ -25,6 +25,7 @@ class TipoHeuristica(Enum):
     ADAPTATIVA_DENSIDADE = auto()
     WAVE_GREEN = auto()
     MANUAL = auto()
+    LLM_HEURISTICA = auto()
 
 
 @dataclass

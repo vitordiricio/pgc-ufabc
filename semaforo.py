@@ -4,6 +4,7 @@ Sistema com vias de mão única: Horizontal (Leste→Oeste) e Vertical (Norte→
 """
 from typing import Tuple, Dict, Optional
 from configuracao import CONFIG, EstadoSemaforo, Direcao, TipoHeuristica
+from llm_manager import LLMManager
 
 
 class Semaforo:
@@ -150,6 +151,11 @@ class GerenciadorSemaforos:
         # Configurações específicas por heurística
         self.config_heuristica = self._inicializar_config_heuristica()
         self._click_rect = None  # retângulo usado para clique
+        
+        # LLM Manager for LLM heuristic
+        self.llm_manager = None
+        if heuristica == TipoHeuristica.LLM_HEURISTICA:
+            self.llm_manager = LLMManager()
 
     def _semaforo_em_pos(self, pos: Tuple[int, int]) -> Optional[Semaforo]:
         """Retorna o primeiro semáforo sob o ponto do mouse (ou None)."""
@@ -235,6 +241,8 @@ class GerenciadorSemaforos:
             self._atualizar_adaptativa_densidade(densidade_por_cruzamento)
         elif self.heuristica == TipoHeuristica.WAVE_GREEN:
             self._atualizar_wave_green()
+        elif self.heuristica == TipoHeuristica.LLM_HEURISTICA:
+            self._atualizar_llm_heuristica(densidade_por_cruzamento)
     
     def _atualizar_tempo_fixo(self) -> None:
         """Atualização com tempos fixos e alternância simples - MÃO ÚNICA."""
@@ -335,6 +343,62 @@ class GerenciadorSemaforos:
             for semaforo in semaforos_cruzamento.values():
                 semaforo.atualizar()
     
+    def _atualizar_llm_heuristica(self, densidade_por_cruzamento: Dict) -> None:
+        """Atualização usando LLM para controle inteligente - MÃO ÚNICA."""
+        if not self.llm_manager or not self.llm_manager.llm_available:
+            # Fallback to adaptive density if LLM not available
+            self._atualizar_adaptativa_densidade(densidade_por_cruzamento)
+            return
+        
+        # Check if it's time to evaluate
+        if not self.llm_manager.should_evaluate(self.tempo_ciclo):
+            # Just update semaphores normally without LLM decision
+            for id_cruzamento, semaforos_cruzamento in self.semaforos.items():
+                for semaforo in semaforos_cruzamento.values():
+                    semaforo.atualizar()
+                self._verificar_alternancia_mao_unica(semaforos_cruzamento)
+            return
+        
+        try:
+            # Prepare traffic state data
+            global_metrics = {
+                'total_vehicles': sum(sum(densidade.values()) for densidade in densidade_por_cruzamento.values()),
+                'average_wait_time': 0,  # TODO: Calculate from vehicle data
+                'traffic_density': 'medium'  # TODO: Calculate based on density
+            }
+            
+            traffic_state = self.llm_manager.prepare_traffic_state(
+                densidade_por_cruzamento, 
+                self.semaforos, 
+                global_metrics
+            )
+            
+            # Get LLM decisions with timeout handling
+            decisions = self.llm_manager.get_traffic_decisions(traffic_state, self.tempo_ciclo)
+            
+            if decisions:
+                # Apply LLM decisions
+                messages = self.llm_manager.apply_decisions(decisions, self.semaforos)
+                if messages:
+                    print(f"🤖 LLM Decisions: {', '.join(messages)}")
+            else:
+                # Fallback to adaptive density if LLM fails
+                print("⚠️ LLM failed, using fallback heuristic")
+                self._atualizar_adaptativa_densidade(densidade_por_cruzamento)
+                return
+                
+        except Exception as e:
+            print(f"❌ LLM heuristic error: {e}")
+            # Fallback to adaptive density
+            self._atualizar_adaptativa_densidade(densidade_por_cruzamento)
+            return
+        
+        # Update all semaphores normally
+        for id_cruzamento, semaforos_cruzamento in self.semaforos.items():
+            for semaforo in semaforos_cruzamento.values():
+                semaforo.atualizar()
+            self._verificar_alternancia_mao_unica(semaforos_cruzamento)
+    
     def _verificar_alternancia_mao_unica(self, semaforos: Dict[Direcao, Semaforo]) -> None:
         """Verifica e corrige a alternância entre semáforos - MÃO ÚNICA."""
         # Apenas duas direções: NORTE e LESTE
@@ -385,6 +449,13 @@ class GerenciadorSemaforos:
         self.heuristica = nova_heuristica
         self.config_heuristica = self._inicializar_config_heuristica()
         self.tempo_ciclo = 0
+        
+        # Initialize LLM manager if switching to LLM heuristic
+        if nova_heuristica == TipoHeuristica.LLM_HEURISTICA and not self.llm_manager:
+            self.llm_manager = LLMManager()
+        elif nova_heuristica != TipoHeuristica.LLM_HEURISTICA:
+            # Reset LLM manager when switching away from LLM heuristic
+            self.llm_manager = None
     
     def obter_info_heuristica(self) -> str:
         """Retorna informação sobre a heurística atual."""
@@ -393,6 +464,7 @@ class GerenciadorSemaforos:
             TipoHeuristica.ADAPTATIVA_SIMPLES: "Adaptativa Simples",
             TipoHeuristica.ADAPTATIVA_DENSIDADE: "Adaptativa por Densidade",
             TipoHeuristica.WAVE_GREEN: "Onda Verde",
-            TipoHeuristica.MANUAL: "Controle Manual"
+            TipoHeuristica.MANUAL: "Controle Manual",
+            TipoHeuristica.LLM_HEURISTICA: "LLM Inteligente"
         }
         return nomes.get(self.heuristica, "Desconhecida")

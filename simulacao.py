@@ -166,6 +166,8 @@ class Simulacao:
             self._mudar_heuristica(TipoHeuristica.WAVE_GREEN)
         elif evento.key == pygame.K_5:
             self._mudar_heuristica(TipoHeuristica.MANUAL)
+        elif evento.key == pygame.K_6:
+            self._mudar_heuristica(TipoHeuristica.LLM_HEURISTICA)
         elif evento.key == pygame.K_n and self.heuristica_atual == TipoHeuristica.MANUAL:
             self.malha.gerenciador_semaforos.avancar_manual()
             self._mostrar_mensagem("Manual: semáforos avançados")
@@ -188,7 +190,8 @@ class Simulacao:
                 TipoHeuristica.ADAPTATIVA_SIMPLES: "Adaptativa Simples",
                 TipoHeuristica.ADAPTATIVA_DENSIDADE: "Adaptativa por Densidade",
                 TipoHeuristica.WAVE_GREEN: "Onda Verde",
-                TipoHeuristica.MANUAL: "Manual"
+                TipoHeuristica.MANUAL: "Manual",
+                TipoHeuristica.LLM_HEURISTICA: "LLM Inteligente"
             }
             nome_heuristica = nomes.get(nova_heuristica, "Desconhecida")
             self._mostrar_mensagem(f"Heurística: {nome_heuristica}")

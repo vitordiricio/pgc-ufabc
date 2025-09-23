@@ -2,10 +2,10 @@
 LLM Manager for traffic control using Ollama with structured output.
 """
 import json
-import time
 from typing import Dict, List, Optional, Tuple
 from ollama import chat
 from pydantic import ValidationError
+import json
 
 from llm_models import TrafficControlResponse, TrafficStateData, IntersectionDecision, TrafficAction
 from configuracao import CONFIG, Direcao, EstadoSemaforo
@@ -156,16 +156,15 @@ Make 1-2 decisions max."""
                 model=self.model_name,
                 format=TrafficControlResponse.model_json_schema(),
                 options={
-                    'temperature': 0.3,  # Lower temperature for more consistent responses
-                    'top_p': 0.9,
-                    'num_predict': 1000,  # Increased limit for complete JSON
-                    # Remove stop condition to allow complete JSON
+                    'temperature': 0.1,  # Lower temperature for more consistent responses
                 }
             )
             
             if self.debug_mode:
                 print(f"🤖 LLM response received (type: {type(response)})")
-                print(f"🤖 Response content: {response}")
+                # Pretty-print the entire Ollama response including all metadata
+                print("🤖 Complete LLM Response:")
+                print(json.dumps(response, indent=2, ensure_ascii=False))
             
             # Parse and validate the response - handle different response formats
             if isinstance(response, dict) and 'message' in response:

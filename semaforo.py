@@ -201,6 +201,12 @@ class GerenciadorSemaforos:
                 'intervalo_avaliacao': 120,  # Avalia densidade a cada 2 segundos
                 'tempo_desde_avaliacao': 0
             }
+        elif self.heuristica == TipoHeuristica.LLM_HEURISTICA:
+            # LLM heuristic uses adaptive density as fallback, so it needs the same config
+            return {
+                'intervalo_avaliacao': 120,  # Avalia densidade a cada 2 segundos
+                'tempo_desde_avaliacao': 0
+            }
         return {}
     
     def adicionar_semaforo(self, semaforo: Semaforo) -> None:

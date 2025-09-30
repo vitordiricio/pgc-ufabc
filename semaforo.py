@@ -132,7 +132,7 @@ class Semaforo:
 class GerenciadorSemaforos:
     """Gerencia todos os semáforos com suporte a heurísticas - MÃO ÚNICA."""
     
-    def __init__(self, heuristica: TipoHeuristica = TipoHeuristica.TEMPO_FIXO):
+    def __init__(self, heuristica: TipoHeuristica = TipoHeuristica.VERTICAL_HORIZONTAL):
         """
         Inicializa o gerenciador.
         
@@ -226,11 +226,9 @@ class GerenciadorSemaforos:
     def obter_info_heuristica(self) -> str:
         """Retorna informação sobre a heurística atual."""
         nomes = {
-            TipoHeuristica.TEMPO_FIXO: "Tempo Fixo",
-            TipoHeuristica.ADAPTATIVA_SIMPLES: "Adaptativa Simples",
-            TipoHeuristica.ADAPTATIVA_DENSIDADE: "Adaptativa por Densidade",
-            TipoHeuristica.WAVE_GREEN: "Onda Verde",
-            TipoHeuristica.MANUAL: "Controle Manual",
-            TipoHeuristica.LLM_HEURISTICA: "LLM Inteligente"
+            TipoHeuristica.VERTICAL_HORIZONTAL: "Vertical/Horizontal",
+            TipoHeuristica.RANDOM_OPEN_CLOSE: "Aleatório",
+            TipoHeuristica.LLM_HEURISTICA: "LLM Inteligente",
+            TipoHeuristica.MANUAL: "Manual"
         }
         return nomes.get(self.tipo_heuristica, "Desconhecida")

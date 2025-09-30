@@ -20,12 +20,10 @@ class EstadoSemaforo(Enum):
 
 class TipoHeuristica(Enum):
     """Tipos de heurísticas disponíveis para controle de semáforos."""
-    TEMPO_FIXO = auto()
-    ADAPTATIVA_SIMPLES = auto()
-    ADAPTATIVA_DENSIDADE = auto()
-    WAVE_GREEN = auto()
-    MANUAL = auto()
-    LLM_HEURISTICA = auto()
+    VERTICAL_HORIZONTAL = auto()  # Alternates between vertical and horizontal every 5 seconds
+    RANDOM_OPEN_CLOSE = auto()    # Randomly changes states while respecting intersections
+    LLM_HEURISTICA = auto()       # LLM-based intelligent control
+    MANUAL = auto()               # Manual control via mouse clicks and keyboard
 
 
 @dataclass
@@ -133,7 +131,7 @@ class Configuracao:
     })
 
     # Configurações de heurísticas
-    HEURISTICA_ATIVA: TipoHeuristica = TipoHeuristica.ADAPTATIVA_DENSIDADE
+    HEURISTICA_ATIVA: TipoHeuristica = TipoHeuristica.VERTICAL_HORIZONTAL
     LIMIAR_DENSIDADE_BAIXA: int = 3
     LIMIAR_DENSIDADE_MEDIA: int = 6
     LIMIAR_DENSIDADE_ALTA: int = 10

@@ -137,7 +137,7 @@ class Simulacao:
             self._mostrar_mensagem(f"Cruz {cid} • {nome_dir}: {nome_est}")
         else:
             if self.heuristica_atual != TipoHeuristica.MANUAL:
-                self._mostrar_mensagem("Ative o modo Manual (tecla 5) para controlar por clique")
+                self._mostrar_mensagem("Ative o modo Manual (tecla 4) para controlar por clique")
 
     def _processar_tecla(self, evento: pygame.event.Event) -> None:
         if evento.key == pygame.K_ESCAPE:
@@ -157,17 +157,13 @@ class Simulacao:
             self.multiplicador_velocidade = max(0.5, self.multiplicador_velocidade - 0.5)
             self._mostrar_mensagem(f"Velocidade: {self.multiplicador_velocidade}x")
         elif evento.key == pygame.K_1:
-            self._mudar_heuristica(TipoHeuristica.TEMPO_FIXO)
+            self._mudar_heuristica(TipoHeuristica.VERTICAL_HORIZONTAL)
         elif evento.key == pygame.K_2:
-            self._mudar_heuristica(TipoHeuristica.ADAPTATIVA_SIMPLES)
+            self._mudar_heuristica(TipoHeuristica.RANDOM_OPEN_CLOSE)
         elif evento.key == pygame.K_3:
-            self._mudar_heuristica(TipoHeuristica.ADAPTATIVA_DENSIDADE)
-        elif evento.key == pygame.K_4:
-            self._mudar_heuristica(TipoHeuristica.WAVE_GREEN)
-        elif evento.key == pygame.K_5:
-            self._mudar_heuristica(TipoHeuristica.MANUAL)
-        elif evento.key == pygame.K_6:
             self._mudar_heuristica(TipoHeuristica.LLM_HEURISTICA)
+        elif evento.key == pygame.K_4:
+            self._mudar_heuristica(TipoHeuristica.MANUAL)
         elif evento.key == pygame.K_n and self.heuristica_atual == TipoHeuristica.MANUAL:
             self.malha.gerenciador_semaforos.avancar_manual()
             self._mostrar_mensagem("Manual: semáforos avançados")
@@ -186,12 +182,10 @@ class Simulacao:
             self.inicio_heuristica = tempo_atual
 
             nomes = {
-                TipoHeuristica.TEMPO_FIXO: "Tempo Fixo",
-                TipoHeuristica.ADAPTATIVA_SIMPLES: "Adaptativa Simples",
-                TipoHeuristica.ADAPTATIVA_DENSIDADE: "Adaptativa por Densidade",
-                TipoHeuristica.WAVE_GREEN: "Onda Verde",
-                TipoHeuristica.MANUAL: "Manual",
-                TipoHeuristica.LLM_HEURISTICA: "LLM Inteligente"
+                TipoHeuristica.VERTICAL_HORIZONTAL: "Vertical/Horizontal",
+                TipoHeuristica.RANDOM_OPEN_CLOSE: "Aleatório",
+                TipoHeuristica.LLM_HEURISTICA: "LLM Inteligente",
+                TipoHeuristica.MANUAL: "Manual"
             }
             nome_heuristica = nomes.get(nova_heuristica, "Desconhecida")
             self._mostrar_mensagem(f"Heurística: {nome_heuristica}")

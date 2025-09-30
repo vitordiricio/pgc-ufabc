@@ -4,7 +4,8 @@ Implementa padrão Strategy para diferentes algoritmos de controle.
 """
 from abc import ABC, abstractmethod
 from typing import Dict, Tuple, TYPE_CHECKING
-from configuracao import TipoHeuristica, EstadoSemaforo, Direcao, CONFIG
+import random
+from configuracao import TipoHeuristica, EstadoSemaforo, Direcao
 
 if TYPE_CHECKING:
     from semaforo import Semaforo
@@ -62,160 +63,112 @@ class Heuristica(ABC):
               semaforo_leste.tempo_no_estado < 2):
             if semaforo_norte.estado == EstadoSemaforo.VERMELHO:
                 semaforo_norte.forcar_mudanca(EstadoSemaforo.VERDE)
-    
-    def _ajustar_tempos_por_densidade(self, semaforos: Dict[Direcao, 'Semaforo'], 
-                                     densidade: Dict[Direcao, int]) -> None:
-        """Ajusta os tempos dos semáforos baseado na densidade - MÃO ÚNICA."""
-        for direcao, semaforo in semaforos.items():
-            if direcao not in CONFIG.DIRECOES_PERMITIDAS:
-                continue
-                
-            qtd_veiculos = densidade.get(direcao, 0)
-            
-            if qtd_veiculos <= CONFIG.LIMIAR_DENSIDADE_BAIXA:
-                tempo_verde = CONFIG.TEMPO_VERDE_DENSIDADE_BAIXA
-            elif qtd_veiculos <= CONFIG.LIMIAR_DENSIDADE_MEDIA:
-                tempo_verde = CONFIG.TEMPO_VERDE_DENSIDADE_MEDIA
-            else:
-                tempo_verde = CONFIG.TEMPO_VERDE_DENSIDADE_ALTA
-            
-            semaforo.definir_tempo_verde(tempo_verde)
 
 
-class HeuristicaTempoFixo(Heuristica):
-    """Heurística com tempos fixos e alternância simples."""
+class HeuristicaVerticalHorizontal(Heuristica):
+    """
+    Heurística que alterna entre tráfego vertical e horizontal a cada 5 segundos.
+    Quando os horizontais fecham, os verticais abrem e vice-versa.
+    """
     
     def _inicializar_config(self) -> Dict:
-        """Inicializa configurações para tempo fixo."""
-        return {}
-    
-    def atualizar(self, semaforos: Dict[Tuple[int, int], Dict[Direcao, 'Semaforo']], 
-                  densidade_por_cruzamento: Dict[Tuple[int, int], Dict[Direcao, int]]) -> None:
-        """Atualização com tempos fixos e alternância simples - MÃO ÚNICA."""
-        for id_cruzamento, semaforos_cruzamento in semaforos.items():
-            # Atualiza cada semáforo
-            for semaforo in semaforos_cruzamento.values():
-                semaforo.atualizar()
-            
-            # Verifica alternância simples entre Norte e Leste
-            self._verificar_alternancia_mao_unica(semaforos_cruzamento)
-
-
-class HeuristicaAdaptativaSimples(Heuristica):
-    """Heurística adaptativa baseada em densidade simples."""
-    
-    def _inicializar_config(self) -> Dict:
-        """Inicializa configurações para adaptativa simples."""
-        return {}
-    
-    def atualizar(self, semaforos: Dict[Tuple[int, int], Dict[Direcao, 'Semaforo']], 
-                  densidade_por_cruzamento: Dict[Tuple[int, int], Dict[Direcao, int]]) -> None:
-        """Atualização adaptativa baseada em densidade simples - MÃO ÚNICA."""
-        for id_cruzamento, semaforos_cruzamento in semaforos.items():
-            densidade_cruzamento = densidade_por_cruzamento.get(id_cruzamento, {})
-            
-            # Calcula densidade para cada direção
-            densidade_norte = densidade_cruzamento.get(Direcao.NORTE, 0)
-            densidade_leste = densidade_cruzamento.get(Direcao.LESTE, 0)
-            
-            # Ajusta tempos baseado na densidade
-            for direcao, semaforo in semaforos_cruzamento.items():
-                if direcao == Direcao.NORTE:
-                    if densidade_norte > densidade_leste * 1.5:
-                        semaforo.definir_tempo_verde(CONFIG.TEMPO_VERDE_DENSIDADE_ALTA)
-                    else:
-                        semaforo.definir_tempo_verde(CONFIG.TEMPO_VERDE_DENSIDADE_MEDIA)
-                elif direcao == Direcao.LESTE:
-                    if densidade_leste > densidade_norte * 1.5:
-                        semaforo.definir_tempo_verde(CONFIG.TEMPO_VERDE_DENSIDADE_ALTA)
-                    else:
-                        semaforo.definir_tempo_verde(CONFIG.TEMPO_VERDE_DENSIDADE_MEDIA)
-                
-                semaforo.atualizar()
-            
-            self._verificar_alternancia_mao_unica(semaforos_cruzamento)
-
-
-class HeuristicaAdaptativaDensidade(Heuristica):
-    """Heurística adaptativa com análise detalhada de densidade."""
-    
-    def _inicializar_config(self) -> Dict:
-        """Inicializa configurações para adaptativa densidade."""
+        """Inicializa configurações para alternância vertical/horizontal."""
         return {
-            'intervalo_avaliacao': 120,  # Avalia densidade a cada 2 segundos
-            'tempo_desde_avaliacao': 0
+            'intervalo_alternancia': 300,  # 5 segundos (300 frames a 60 FPS)
+            'tempo_desde_ultima_alternancia': 0,
+            'fase_atual': 'horizontal'  # Começa com horizontal (LESTE)
         }
     
     def atualizar(self, semaforos: Dict[Tuple[int, int], Dict[Direcao, 'Semaforo']], 
                   densidade_por_cruzamento: Dict[Tuple[int, int], Dict[Direcao, int]]) -> None:
-        """Atualização adaptativa com análise detalhada de densidade - MÃO ÚNICA."""
-        self.config['tempo_desde_avaliacao'] += 1
+        """Atualização com alternância vertical/horizontal a cada 5 segundos."""
+        self.config['tempo_desde_ultima_alternancia'] += 1
         
+        # Verifica se é hora de alternar
+        if self.config['tempo_desde_ultima_alternancia'] >= self.config['intervalo_alternancia']:
+            self._alternar_fase(semaforos)
+            self.config['tempo_desde_ultima_alternancia'] = 0
+        
+        # Atualiza todos os semáforos normalmente
         for id_cruzamento, semaforos_cruzamento in semaforos.items():
-            # Atualiza normalmente
             for semaforo in semaforos_cruzamento.values():
                 semaforo.atualizar()
-            
-            # Avalia densidade periodicamente
-            if self.config['tempo_desde_avaliacao'] >= self.config['intervalo_avaliacao']:
-                densidade_cruzamento = densidade_por_cruzamento.get(id_cruzamento, {})
-                self._ajustar_tempos_por_densidade(semaforos_cruzamento, densidade_cruzamento)
-            
-            self._verificar_alternancia_mao_unica(semaforos_cruzamento)
-        
-        if self.config['tempo_desde_avaliacao'] >= self.config['intervalo_avaliacao']:
-            self.config['tempo_desde_avaliacao'] = 0
+    
+    def _alternar_fase(self, semaforos: Dict[Tuple[int, int], Dict[Direcao, 'Semaforo']]) -> None:
+        """Alterna entre fase horizontal e vertical."""
+        if self.config['fase_atual'] == 'horizontal':
+            # Muda para vertical (NORTE verde, LESTE vermelho)
+            self._definir_fase_vertical(semaforos)
+            self.config['fase_atual'] = 'vertical'
+        else:
+            # Muda para horizontal (LESTE verde, NORTE vermelho)
+            self._definir_fase_horizontal(semaforos)
+            self.config['fase_atual'] = 'horizontal'
+    
+    def _definir_fase_horizontal(self, semaforos: Dict[Tuple[int, int], Dict[Direcao, 'Semaforo']]) -> None:
+        """Define fase horizontal: LESTE verde, NORTE vermelho."""
+        for semaforos_cruzamento in semaforos.values():
+            if Direcao.LESTE in semaforos_cruzamento:
+                semaforos_cruzamento[Direcao.LESTE].forcar_mudanca(EstadoSemaforo.VERDE)
+            if Direcao.NORTE in semaforos_cruzamento:
+                semaforos_cruzamento[Direcao.NORTE].forcar_mudanca(EstadoSemaforo.VERMELHO)
+    
+    def _definir_fase_vertical(self, semaforos: Dict[Tuple[int, int], Dict[Direcao, 'Semaforo']]) -> None:
+        """Define fase vertical: NORTE verde, LESTE vermelho."""
+        for semaforos_cruzamento in semaforos.values():
+            if Direcao.NORTE in semaforos_cruzamento:
+                semaforos_cruzamento[Direcao.NORTE].forcar_mudanca(EstadoSemaforo.VERDE)
+            if Direcao.LESTE in semaforos_cruzamento:
+                semaforos_cruzamento[Direcao.LESTE].forcar_mudanca(EstadoSemaforo.VERMELHO)
 
 
-class HeuristicaWaveGreen(Heuristica):
-    """Heurística de onda verde para fluxo contínuo."""
+class HeuristicaRandomOpenClose(Heuristica):
+    """
+    Heurística que muda aleatoriamente os estados dos semáforos,
+    mas respeitando as interseções (não pode ter ambos abertos na mesma interseção).
+    """
     
     def _inicializar_config(self) -> Dict:
-        """Inicializa configurações para onda verde."""
+        """Inicializa configurações para controle aleatório."""
         return {
-            'offset_por_cruzamento': 60,  # 1 segundo de offset entre cruzamentos
-            'direcao_onda': Direcao.LESTE  # Direção prioritária da onda verde
+            'intervalo_mudanca': 120,  # 2 segundos entre mudanças aleatórias
+            'tempo_desde_ultima_mudanca': 0,
+            'seed': 42  # Seed fixo para reproduzibilidade
         }
     
     def atualizar(self, semaforos: Dict[Tuple[int, int], Dict[Direcao, 'Semaforo']], 
                   densidade_por_cruzamento: Dict[Tuple[int, int], Dict[Direcao, int]]) -> None:
-        """Atualização com onda verde para fluxo contínuo - MÃO ÚNICA."""
+        """Atualização com mudanças aleatórias respeitando interseções."""
+        self.config['tempo_desde_ultima_mudanca'] += 1
+        
+        # Verifica se é hora de fazer uma mudança aleatória
+        if self.config['tempo_desde_ultima_mudanca'] >= self.config['intervalo_mudanca']:
+            self._fazer_mudanca_aleatoria(semaforos)
+            self.config['tempo_desde_ultima_mudanca'] = 0
+        
+        # Atualiza todos os semáforos normalmente
         for id_cruzamento, semaforos_cruzamento in semaforos.items():
-            # Calcula offset baseado na posição do cruzamento
-            offset = id_cruzamento[1] * self.config['offset_por_cruzamento']
-            
-            # Determina fase atual considerando offset
-            fase_ajustada = (self.tempo_ciclo + offset) % 480  # Ciclo completo de 8 segundos
-            
-            # Define estados baseado na fase - simplificado para mão única
-            if fase_ajustada < 180:  # Primeiros 3 segundos - prioridade horizontal
-                # Leste verde, Norte vermelho
-                if Direcao.LESTE in semaforos_cruzamento:
-                    if semaforos_cruzamento[Direcao.LESTE].estado != EstadoSemaforo.VERDE:
-                        semaforos_cruzamento[Direcao.LESTE].forcar_mudanca(EstadoSemaforo.VERDE)
-                if Direcao.NORTE in semaforos_cruzamento:
-                    if semaforos_cruzamento[Direcao.NORTE].estado != EstadoSemaforo.VERMELHO:
-                        semaforos_cruzamento[Direcao.NORTE].forcar_mudanca(EstadoSemaforo.VERMELHO)
-            elif fase_ajustada < 240:  # 1 segundo amarelo
-                if Direcao.LESTE in semaforos_cruzamento:
-                    if semaforos_cruzamento[Direcao.LESTE].estado == EstadoSemaforo.VERDE:
-                        semaforos_cruzamento[Direcao.LESTE].forcar_mudanca(EstadoSemaforo.AMARELO)
-            elif fase_ajustada < 420:  # 3 segundos - prioridade vertical
-                # Norte verde, Leste vermelho
-                if Direcao.NORTE in semaforos_cruzamento:
-                    if semaforos_cruzamento[Direcao.NORTE].estado != EstadoSemaforo.VERDE:
-                        semaforos_cruzamento[Direcao.NORTE].forcar_mudanca(EstadoSemaforo.VERDE)
-                if Direcao.LESTE in semaforos_cruzamento:
-                    if semaforos_cruzamento[Direcao.LESTE].estado != EstadoSemaforo.VERMELHO:
-                        semaforos_cruzamento[Direcao.LESTE].forcar_mudanca(EstadoSemaforo.VERMELHO)
-            else:  # Último segundo amarelo
-                if Direcao.NORTE in semaforos_cruzamento:
-                    if semaforos_cruzamento[Direcao.NORTE].estado == EstadoSemaforo.VERDE:
-                        semaforos_cruzamento[Direcao.NORTE].forcar_mudanca(EstadoSemaforo.AMARELO)
-            
-            # Atualiza os semáforos
             for semaforo in semaforos_cruzamento.values():
                 semaforo.atualizar()
+    
+    def _fazer_mudanca_aleatoria(self, semaforos: Dict[Tuple[int, int], Dict[Direcao, 'Semaforo']]) -> None:
+        """Faz mudanças aleatórias respeitando as interseções."""
+        # Usa seed fixo para reproduzibilidade
+        random.seed(self.config['seed'] + self.tempo_ciclo)
+        
+        for id_cruzamento, semaforos_cruzamento in semaforos.items():
+            # Escolhe aleatoriamente qual direção abrir na interseção
+            direcao_escolhida = random.choice([Direcao.NORTE, Direcao.LESTE])
+            
+            # Fecha ambas as direções primeiro
+            if Direcao.NORTE in semaforos_cruzamento:
+                semaforos_cruzamento[Direcao.NORTE].forcar_mudanca(EstadoSemaforo.VERMELHO)
+            if Direcao.LESTE in semaforos_cruzamento:
+                semaforos_cruzamento[Direcao.LESTE].forcar_mudanca(EstadoSemaforo.VERMELHO)
+            
+            # Abre a direção escolhida
+            if direcao_escolhida in semaforos_cruzamento:
+                semaforos_cruzamento[direcao_escolhida].forcar_mudanca(EstadoSemaforo.VERDE)
 
 
 class HeuristicaManual(Heuristica):
@@ -254,8 +207,8 @@ class HeuristicaLLM(Heuristica):
                   densidade_por_cruzamento: Dict[Tuple[int, int], Dict[Direcao, int]]) -> None:
         """Atualização usando LLM para controle inteligente - MÃO ÚNICA."""
         if not self.llm_manager or not self.llm_manager.llm_available:
-            # Fallback to adaptive density if LLM not available
-            heuristica_fallback = HeuristicaAdaptativaDensidade()
+            # Fallback to vertical/horizontal if LLM not available
+            heuristica_fallback = HeuristicaVerticalHorizontal()
             heuristica_fallback.tempo_ciclo = self.tempo_ciclo
             heuristica_fallback.config = self.config.copy()
             heuristica_fallback.atualizar(semaforos, densidade_por_cruzamento)
@@ -293,9 +246,9 @@ class HeuristicaLLM(Heuristica):
                 if messages:
                     print(f"🤖 LLM Decisions: {', '.join(messages)}")
             else:
-                # Fallback to adaptive density if LLM fails
+                # Fallback to vertical/horizontal if LLM fails
                 print("⚠️ LLM failed, using fallback heuristic")
-                heuristica_fallback = HeuristicaAdaptativaDensidade()
+                heuristica_fallback = HeuristicaVerticalHorizontal()
                 heuristica_fallback.tempo_ciclo = self.tempo_ciclo
                 heuristica_fallback.config = self.config.copy()
                 heuristica_fallback.atualizar(semaforos, densidade_por_cruzamento)
@@ -303,8 +256,8 @@ class HeuristicaLLM(Heuristica):
                 
         except Exception as e:
             print(f"❌ LLM heuristic error: {e}")
-            # Fallback to adaptive density
-            heuristica_fallback = HeuristicaAdaptativaDensidade()
+            # Fallback to vertical/horizontal
+            heuristica_fallback = HeuristicaVerticalHorizontal()
             heuristica_fallback.tempo_ciclo = self.tempo_ciclo
             heuristica_fallback.config = self.config.copy()
             heuristica_fallback.atualizar(semaforos, densidade_por_cruzamento)
@@ -328,12 +281,10 @@ def criar_heuristica(tipo: TipoHeuristica) -> Heuristica:
         Instância da heurística correspondente
     """
     heuristica_map = {
-        TipoHeuristica.TEMPO_FIXO: HeuristicaTempoFixo,
-        TipoHeuristica.ADAPTATIVA_SIMPLES: HeuristicaAdaptativaSimples,
-        TipoHeuristica.ADAPTATIVA_DENSIDADE: HeuristicaAdaptativaDensidade,
-        TipoHeuristica.WAVE_GREEN: HeuristicaWaveGreen,
-        TipoHeuristica.MANUAL: HeuristicaManual,
-        TipoHeuristica.LLM_HEURISTICA: HeuristicaLLM
+        TipoHeuristica.VERTICAL_HORIZONTAL: HeuristicaVerticalHorizontal,
+        TipoHeuristica.RANDOM_OPEN_CLOSE: HeuristicaRandomOpenClose,
+        TipoHeuristica.LLM_HEURISTICA: HeuristicaLLM,
+        TipoHeuristica.MANUAL: HeuristicaManual
     }
     
     heuristica_class = heuristica_map.get(tipo)

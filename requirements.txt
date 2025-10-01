@@ -6,3 +6,4 @@ pluggy==1.6.0
 pygame==2.6.1
 pytest==7.4.3
 pydantic==2.10.0
+tqdm

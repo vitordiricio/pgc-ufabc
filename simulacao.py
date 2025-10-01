@@ -1,14 +1,21 @@
-"""ltiplas heu
-Módulo principal de simulação com suporte a múrísticas e análise de desempenho.
+"""
+Módulo principal de simulação com suporte a múltiplas heurísticas e análise de desempenho.
 """
 import pygame
 import json
 import os
+import time
 from datetime import datetime
 from typing import Dict
 from configuracao import CONFIG, TipoHeuristica, Direcao, EstadoSemaforo
 from cruzamento import MalhaViaria
 from renderizador import Renderizador
+
+try:
+    from tqdm import tqdm
+    TQDM_AVAILABLE = True
+except ImportError:
+    TQDM_AVAILABLE = False
 
 
 class GerenciadorMetricas:
@@ -261,3 +268,172 @@ class Simulacao:
             self.renderizar()
         print("\nSimulação encerrada.")
         pygame.quit()
+
+
+class SimulacaoHeadless:
+    """Simulação sem interface gráfica para análise de desempenho."""
+    
+    def __init__(self, heuristica: TipoHeuristica, duracao_segundos: int, 
+                 nome_arquivo: str = None, verbose: bool = False):
+        self.heuristica = heuristica
+        self.duracao_segundos = duracao_segundos
+        self.nome_arquivo = nome_arquivo
+        self.verbose = verbose
+        
+        # Inicializa componentes
+        self.malha = None
+        self.gerenciador_metricas = GerenciadorMetricas()
+        self.tempo_inicio = None
+        self.tempo_fim = None
+        
+        # Configurações para simulação headless
+        self.fps = 60  # FPS fixo para simulação
+        self.tempo_acumulado = 0.0
+        
+    def inicializar(self):
+        """Inicializa a simulação headless."""
+        self.malha = MalhaViaria(CONFIG.LINHAS_GRADE, CONFIG.COLUNAS_GRADE)
+        self.malha.mudar_heuristica(self.heuristica)
+        self.tempo_inicio = time.time()
+        
+        if self.verbose:
+            print(f"🚀 Iniciando simulação headless com heurística: {self.heuristica.name}")
+            print(f"⏱️  Duração: {self.duracao_segundos} segundos")
+            print(f"📊 Grade: {CONFIG.LINHAS_GRADE}x{CONFIG.COLUNAS_GRADE}")
+    
+    def executar(self):
+        """Executa a simulação headless."""
+        self.inicializar()
+        
+        if self.verbose:
+            print("🔄 Executando simulação...")
+        
+        # Configura progress bar se tqdm estiver disponível
+        if TQDM_AVAILABLE:
+            progress_bar = tqdm(
+                total=self.duracao_segundos,
+                desc=f"Simulação {self.heuristica.name}",
+                unit="s",
+                bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt}s [{elapsed}<{remaining}, {rate_fmt}]"
+            )
+        else:
+            progress_bar = None
+        
+        try:
+            # Loop principal da simulação
+            while True:
+                tempo_atual = time.time()
+                tempo_decorrido = tempo_atual - self.tempo_inicio
+                
+                # Atualiza progress bar
+                if progress_bar:
+                    progress_bar.n = int(tempo_decorrido)
+                    progress_bar.refresh()
+                
+                # Verifica se atingiu o tempo limite
+                if tempo_decorrido >= self.duracao_segundos:
+                    break
+                
+                # Atualiza a simulação
+                dt = 1.0 / self.fps
+                self.tempo_acumulado += dt
+                
+                while self.tempo_acumulado >= 1.0 / CONFIG.FPS:
+                    self.malha.atualizar()
+                    self.tempo_acumulado -= 1.0 / CONFIG.FPS
+                    
+                    # Coleta métricas periodicamente
+                    if self.malha.metricas['tempo_simulacao'] % CONFIG.INTERVALO_METRICAS == 0:
+                        self._coletar_metricas()
+                
+                # Pequena pausa para não sobrecarregar o CPU
+                time.sleep(0.001)
+        
+        finally:
+            if progress_bar:
+                progress_bar.close()
+        
+        self.tempo_fim = time.time()
+        self._finalizar()
+    
+    def _coletar_metricas(self):
+        """Coleta métricas da simulação."""
+        estatisticas = self.malha.obter_estatisticas()
+        self.gerenciador_metricas.registrar_metricas(estatisticas, self.heuristica)
+        
+        if self.verbose and estatisticas['veiculos_concluidos'] > 0:
+            print(f"📈 Veículos concluídos: {estatisticas['veiculos_concluidos']}, "
+                  f"Tempo médio: {estatisticas['tempo_viagem_medio']:.2f}s")
+    
+    def _finalizar(self):
+        """Finaliza a simulação e gera relatório."""
+        duracao_real = self.tempo_fim - self.tempo_inicio
+        
+        if self.verbose:
+            print(f"\n✅ Simulação concluída em {duracao_real:.2f} segundos")
+        
+        # Coleta métricas finais
+        estatisticas_finais = self.malha.obter_estatisticas()
+        self.gerenciador_metricas.registrar_metricas(estatisticas_finais, self.heuristica)
+        
+        # Gera relatório
+        self._gerar_relatorio(duracao_real, estatisticas_finais)
+    
+    def _gerar_relatorio(self, duracao_real: float, estatisticas_finais: dict):
+        """Gera relatório detalhado da simulação."""
+        # Nome do arquivo
+        if not self.nome_arquivo:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            self.nome_arquivo = f"relatorio_{self.heuristica.name.lower()}_{timestamp}.json"
+        
+        # Dados do relatório
+        relatorio = {
+            'simulacao': {
+                'heuristica': self.heuristica.name,
+                'duracao_solicitada': self.duracao_segundos,
+                'duracao_real': duracao_real,
+                'inicio': datetime.fromtimestamp(self.tempo_inicio).isoformat(),
+                'fim': datetime.fromtimestamp(self.tempo_fim).isoformat(),
+                'grade': f"{CONFIG.LINHAS_GRADE}x{CONFIG.COLUNAS_GRADE}",
+                'fps': self.fps
+            },
+            'metricas': {
+                'veiculos_concluidos': estatisticas_finais['veiculos_concluidos'],
+                'tempo_viagem_medio': estatisticas_finais['tempo_viagem_medio'],
+                'tempo_parado_medio': estatisticas_finais['tempo_parado_medio'],
+                'eficiencia_media': self._calcular_eficiencia(estatisticas_finais),
+                'score_heuristica': self.gerenciador_metricas.calcular_score(self.heuristica)
+            },
+            'configuracao': {
+                'taxa_geracao': CONFIG.TAXA_GERACAO_VEICULO,
+                'velocidade_max': CONFIG.VELOCIDADE_MAX_VEICULO,
+                'fps_simulacao': CONFIG.FPS,
+                'intervalo_metricas': CONFIG.INTERVALO_METRICAS
+            }
+        }
+        
+        # Salva o relatório
+        os.makedirs('relatorios', exist_ok=True)
+        caminho_completo = os.path.join('relatorios', self.nome_arquivo)
+        
+        with open(caminho_completo, 'w', encoding='utf-8') as f:
+            json.dump(relatorio, f, indent=2, ensure_ascii=False)
+        
+        # Exibe resumo
+        print(f"\n📊 RELATÓRIO DE DESEMPENHO - {self.heuristica.name}")
+        print("=" * 50)
+        print(f"⏱️  Duração: {duracao_real:.2f}s (solicitado: {self.duracao_segundos}s)")
+        print(f"🚗 Veículos processados: {estatisticas_finais['veiculos_concluidos']}")
+        print(f"🕐 Tempo médio de viagem: {estatisticas_finais['tempo_viagem_medio']:.2f}s")
+        print(f"⏸️  Tempo médio parado: {estatisticas_finais['tempo_parado_medio']:.2f}s")
+        print(f"📈 Eficiência: {self._calcular_eficiencia(estatisticas_finais):.1f}%")
+        print(f"⭐ Score da heurística: {self.gerenciador_metricas.calcular_score(self.heuristica):.1f}")
+        print(f"💾 Relatório salvo: {caminho_completo}")
+        print("=" * 50)
+    
+    def _calcular_eficiencia(self, estatisticas: dict) -> float:
+        """Calcula a eficiência baseada no tempo de viagem e parado."""
+        if estatisticas['tempo_viagem_medio'] > 0:
+            return ((estatisticas['tempo_viagem_medio'] - estatisticas['tempo_parado_medio']) / 
+                   estatisticas['tempo_viagem_medio']) * 100
+        return 0.0

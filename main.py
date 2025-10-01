@@ -6,8 +6,9 @@ Autores: Vitor Bobig Diricio e Thiago Schwartz Machado
 import pygame
 import sys
 import os
-from configuracao import CONFIG
-from simulacao import Simulacao
+import argparse
+from configuracao import CONFIG, TipoHeuristica
+from simulacao import Simulacao, SimulacaoHeadless
 
 
 def verificar_requisitos():
@@ -19,6 +20,44 @@ def verificar_requisitos():
     except ImportError:
         print("✗ Pygame não encontrado. Instale com: pip install pygame")
         return False
+
+
+def parse_arguments():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Simulação de Tráfego Urbano - UFABC",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Exemplos de uso:
+  python main.py --usegui                    # Executa com interface gráfica
+  python main.py --vertical-horizontal 200   # Executa por 200s com heurística vertical/horizontal
+  python main.py --random 300               # Executa por 300s com heurística aleatória
+  python main.py --llm 180                  # Executa por 180s com heurística LLM
+  python main.py --manual 120               # Executa por 120s com controle manual
+        """
+    )
+    
+    # GUI mode
+    parser.add_argument('--usegui', action='store_true',
+                       help='Executa a simulação com interface gráfica (modo padrão)')
+    
+    # Heuristic-specific modes
+    parser.add_argument('--vertical-horizontal', type=int, metavar='SECONDS',
+                       help='Executa simulação por X segundos usando heurística vertical/horizontal')
+    parser.add_argument('--random', type=int, metavar='SECONDS',
+                       help='Executa simulação por X segundos usando heurística aleatória')
+    parser.add_argument('--llm', type=int, metavar='SECONDS',
+                       help='Executa simulação por X segundos usando heurística LLM')
+    parser.add_argument('--manual', type=int, metavar='SECONDS',
+                       help='Executa simulação por X segundos usando controle manual')
+    
+    # Additional options
+    parser.add_argument('--output', '-o', type=str, metavar='FILE',
+                       help='Nome do arquivo de saída para o relatório (padrão: auto-gerado)')
+    parser.add_argument('--verbose', '-v', action='store_true',
+                       help='Mostra informações detalhadas durante a execução')
+    
+    return parser.parse_args()
 
 
 def exibir_introducao():
@@ -60,8 +99,8 @@ def configurar_ambiente():
     os.makedirs('relatorios', exist_ok=True)
 
 
-def main():
-    """Função principal do programa."""
+def executar_modo_gui():
+    """Executa a simulação com interface gráfica."""
     # Verifica requisitos
     if not verificar_requisitos():
         sys.exit(1)
@@ -96,6 +135,47 @@ def main():
         # Finaliza Pygame
         pygame.quit()
         print("\nSimulação finalizada.")
+
+
+def executar_modo_headless(heuristica: TipoHeuristica, duracao: int, 
+                          nome_arquivo: str = None, verbose: bool = False):
+    """Executa a simulação sem interface gráfica."""
+    try:
+        simulacao = SimulacaoHeadless(
+            heuristica=heuristica,
+            duracao_segundos=duracao,
+            nome_arquivo=nome_arquivo,
+            verbose=verbose
+        )
+        simulacao.executar()
+    except KeyboardInterrupt:
+        print("\n\nSimulação interrompida pelo usuário.")
+    except Exception as e:
+        print(f"\nErro durante a execução: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+def main():
+    """Função principal do programa."""
+    args = parse_arguments()
+    
+    # Determina o modo de execução
+    if args.vertical_horizontal is not None:
+        executar_modo_headless(TipoHeuristica.VERTICAL_HORIZONTAL, 
+                              args.vertical_horizontal, args.output, args.verbose)
+    elif args.random is not None:
+        executar_modo_headless(TipoHeuristica.RANDOM_OPEN_CLOSE, 
+                              args.random, args.output, args.verbose)
+    elif args.llm is not None:
+        executar_modo_headless(TipoHeuristica.LLM_HEURISTICA, 
+                              args.llm, args.output, args.verbose)
+    elif args.manual is not None:
+        executar_modo_headless(TipoHeuristica.MANUAL, 
+                              args.manual, args.output, args.verbose)
+    else:
+        # Modo padrão: GUI
+        executar_modo_gui()
 
 
 if __name__ == "__main__":

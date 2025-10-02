@@ -283,7 +283,14 @@ class MalhaViaria:
             'veiculos_total': 0,
             'veiculos_concluidos': 0,
             'tempo_viagem_total': 0,
-            'tempo_parado_total': 0
+            'tempo_parado_total': 0,
+            # ---- NOVOS AGREGADOS / SÉRIES ----
+            'paradas_totais_total': 0,
+            'distancia_total': 0.0,
+            'tempos_viagem': [],       # lista de tempos de viagem (s) por veículo concluído
+            'tempos_parado': [],       # lista de tempos parados (s)
+            'paradas_por_viagem': [],  # lista de #paradas por veículo
+            'distancias': []           # lista de distâncias percorridas (px)
         }
 
     # -------------------
@@ -415,11 +422,41 @@ class MalhaViaria:
                 self.metricas['veiculos_concluidos'] += 1
                 self.metricas['tempo_viagem_total'] += veiculo.tempo_viagem
                 self.metricas['tempo_parado_total'] += veiculo.tempo_parado
+                # ---- NOVOS ACUMULADORES/SÉRIES ----
+                self.metricas['paradas_totais_total'] += veiculo.paradas_totais
+                self.metricas['distancia_total'] += veiculo.distancia_percorrida
+                self.metricas['tempos_viagem'].append(veiculo.tempo_viagem)
+                self.metricas['tempos_parado'].append(veiculo.tempo_parado)
+                self.metricas['paradas_por_viagem'].append(veiculo.paradas_totais)
+                self.metricas['distancias'].append(veiculo.distancia_percorrida)
 
         self.veiculos = veiculos_ativos
 
     def mudar_heuristica(self, nova_heuristica: TipoHeuristica) -> None:
         self.gerenciador_semaforos.mudar_heuristica(nova_heuristica)
+
+    # --------- helpers internos para estatística instantânea ----------
+    def _cruzamento_id_para_posicao(self, pos: Tuple[float, float]) -> Tuple[int, int]:
+        x, y = pos
+        coluna = int((x - CONFIG.POSICAO_INICIAL_X + CONFIG.ESPACAMENTO_HORIZONTAL / 2) / CONFIG.ESPACAMENTO_HORIZONTAL)
+        linha = int((y - CONFIG.POSICAO_INICIAL_Y + CONFIG.ESPACAMENTO_VERTICAL / 2) / CONFIG.ESPACAMENTO_VERTICAL)
+        coluna = max(0, min(coluna, CONFIG.COLUNAS_GRADE - 1))
+        linha = max(0, min(linha, CONFIG.LINHAS_GRADE - 1))
+        return (linha, coluna)
+
+    def _maior_fila_atual(self) -> int:
+        """
+        Retorna a maior fila atual entre todos os cruzamentos (conta veículos em
+        espera de semáforo, fora da caixa de interseção).
+        """
+        # Aproximação: conta veículos aguardando_semaforo e associa ao cruzamento
+        filas: Dict[Tuple[int, int], int] = {}
+        for v in self.veiculos:
+            if not v.aguardando_semaforo or v.no_cruzamento:
+                continue
+            cid = self._cruzamento_id_para_posicao(tuple(v.posicao))
+            filas[cid] = filas.get(cid, 0) + 1
+        return max(filas.values()) if filas else 0
 
     def obter_estatisticas(self) -> Dict[str, any]:
         veiculos_ativos = len(self.veiculos)
@@ -429,6 +466,47 @@ class MalhaViaria:
             tempo_viagem_medio = self.metricas['tempo_viagem_total'] / self.metricas['veiculos_concluidos'] / CONFIG.FPS
             tempo_parado_medio = self.metricas['tempo_parado_total'] / self.metricas['veiculos_concluidos'] / CONFIG.FPS
 
+        # ---- NOVAS MÉTRICAS DERIVADAS (com base em acumuladores) ----
+        tempo_sim_s = self.metricas['tempo_simulacao'] / CONFIG.FPS
+        velocidade_media_global = 0.0
+        if self.metricas['tempo_viagem_total'] > 0:
+            # distância (px) / tempo (frames) -> px/frame. Convertemos para px/s multiplicando FPS.
+            v_px_por_frame = self.metricas['distancia_total'] / max(1e-9, self.metricas['tempo_viagem_total'])
+            velocidade_media_global = v_px_por_frame * CONFIG.FPS
+
+        paradas_media_por_veiculo = (
+            sum(self.metricas['paradas_por_viagem']) / len(self.metricas['paradas_por_viagem'])
+            if self.metricas['paradas_por_viagem'] else 0.0
+        )
+
+        def _percentil(vals: List[float], p: float) -> float:
+            if not vals:
+                return 0.0
+            arr = sorted(vals)
+            k = (len(arr) - 1) * p
+            f = math.floor(k)
+            c = math.ceil(k)
+            if f == c:
+                return arr[int(k)]
+            return arr[f] + (arr[c] - arr[f]) * (k - f)
+
+        tempo_viagem_p50 = _percentil(self.metricas['tempos_viagem'], 0.50)
+        tempo_viagem_p95 = _percentil(self.metricas['tempos_viagem'], 0.95)
+        # já em segundos? self.metricas['tempos_viagem'] está em frames acumulados convertidos?
+        # Observação: guardamos em 'atualizar' diretamente 'veiculo.tempo_viagem' que está em "passos dt (=frames)"
+        # Lá foi somado com dt=1 por atualização (vide Veiculo.atualizar). Para manter consistência, convertemos aqui:
+        tempo_viagem_p50 /= CONFIG.FPS
+        tempo_viagem_p95 /= CONFIG.FPS
+
+        throughput_por_minuto = (self.metricas['veiculos_concluidos'] / (tempo_sim_s / 60)) if tempo_sim_s > 0 else 0.0
+
+        veiculos_aguardando = sum(1 for v in self.veiculos if v.aguardando_semaforo and not v.no_cruzamento)
+        velocidade_media_ativa = (
+            sum(v.velocidade for v in self.veiculos) / veiculos_ativos if veiculos_ativos > 0 else 0.0
+        )
+
+        maior_fila_cruzamento_atual = self._maior_fila_atual()
+
         return {
             'veiculos_ativos': veiculos_ativos,
             'veiculos_total': self.metricas['veiculos_total'],
@@ -436,5 +514,14 @@ class MalhaViaria:
             'tempo_viagem_medio': tempo_viagem_medio,
             'tempo_parado_medio': tempo_parado_medio,
             'heuristica': self.gerenciador_semaforos.obter_info_heuristica(),
-            'tempo_simulacao': self.metricas['tempo_simulacao'] / CONFIG.FPS
+            'tempo_simulacao': tempo_sim_s,
+            # ---- NOVAS CHAVES ----
+            'velocidade_media_global': velocidade_media_global,          # px/s
+            'paradas_media_por_veiculo': paradas_media_por_veiculo,
+            'tempo_viagem_p50': tempo_viagem_p50,                       # s
+            'tempo_viagem_p95': tempo_viagem_p95,                       # s
+            'throughput_por_minuto': throughput_por_minuto,
+            'veiculos_aguardando': veiculos_aguardando,
+            'velocidade_media_ativa': velocidade_media_ativa,           # px/frame (interno), mas útil relativa
+            'maior_fila_cruzamento_atual': maior_fila_cruzamento_atual
         }

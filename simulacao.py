@@ -27,7 +27,11 @@ class GerenciadorMetricas:
                 'tempo_viagem': [],
                 'tempo_parado': [],
                 'veiculos_processados': 0,
-                'eficiencia': []
+                'eficiencia': [],
+                # Séries adicionais para comparação
+                'throughput_por_minuto': [],
+                'paradas_media_por_veiculo': [],
+                'tempo_viagem_p95': []
             } for heuristica in TipoHeuristica
         }
 
@@ -38,16 +42,28 @@ class GerenciadorMetricas:
         }
 
     def calcular_score(self, heuristica: TipoHeuristica) -> float:
+        """
+        Score composto com normalizações suaves:
+          - tm_norm = 1 / (1 + tm)           → menor tempo de viagem é melhor
+          - tp_norm = 1 / (1 + tp)           → menor tempo parado é melhor
+          - th_norm = min(1, th/60)          → referência 60 veículos/min
+
+        Pesos:
+          40% tempo de viagem, 30% tempo parado, 30% throughput.
+        """
         m = self.metricas_por_heuristica[heuristica]
-        if not m['tempo_viagem'] or not m['veiculos_processados']:
+        if not m['tempo_viagem'] or not m['throughput_por_minuto']:
             return 0.0
-        tm = sum(m['tempo_viagem']) / len(m['tempo_viagem'])
-        tp = sum(m['tempo_parado']) / len(m['tempo_parado'])
-        v = m['veiculos_processados']
-        tm_norm = max(0, min(1, 1 - tm / 10))
-        tp_norm = max(0, min(1, 1 - tp / 5))
-        v_norm = max(0, min(1, v / 200))
-        score = (0.5 * tm_norm + 0.3 * tp_norm + 0.2 * v_norm) * 100
+
+        tm = sum(m['tempo_viagem']) / len(m['tempo_viagem'])          # segundos
+        tp = sum(m['tempo_parado']) / len(m['tempo_parado'])          # segundos
+        th = sum(m['throughput_por_minuto']) / len(m['throughput_por_minuto'])  # veículos/min
+
+        tm_norm = 1.0 / (1.0 + max(0.0, tm))
+        tp_norm = 1.0 / (1.0 + max(0.0, tp))
+        th_norm = min(1.0, max(0.0, th) / 60.0)
+
+        score = (0.4 * tm_norm + 0.3 * tp_norm + 0.3 * th_norm) * 100.0
         return score
 
     def registrar_metricas(self, estatisticas: Dict, heuristica: TipoHeuristica) -> None:
@@ -61,6 +77,11 @@ class GerenciadorMetricas:
                               estatisticas['tempo_viagem_medio']) * 100
                 metricas['eficiencia'].append(eficiencia)
 
+            # séries comparativas novas (se existirem nas estatísticas)
+            metricas['throughput_por_minuto'].append(estatisticas.get('throughput_por_minuto', 0.0))
+            metricas['paradas_media_por_veiculo'].append(estatisticas.get('paradas_media_por_veiculo', 0.0))
+            metricas['tempo_viagem_p95'].append(estatisticas.get('tempo_viagem_p95', 0.0))
+
     def obter_comparacao(self) -> Dict:
         comparacao = {}
         for heuristica, metricas in self.metricas_por_heuristica.items():
@@ -70,14 +91,28 @@ class GerenciadorMetricas:
                     'tempo_parado_medio': sum(metricas['tempo_parado']) / len(metricas['tempo_parado']),
                     'eficiencia_media': sum(metricas['eficiencia']) / len(metricas['eficiencia'])
                     if metricas['eficiencia'] else 0,
-                    'veiculos_processados': metricas['veiculos_processados']
+                    'veiculos_processados': metricas['veiculos_processados'],
+                    'throughput_medio_por_minuto': (
+                        sum(metricas['throughput_por_minuto']) / len(metricas['throughput_por_minuto'])
+                        if metricas['throughput_por_minuto'] else 0.0
+                    ),
+                    'paradas_medias_por_veiculo': (
+                        sum(metricas['paradas_media_por_veiculo']) / len(metricas['paradas_media_por_veiculo'])
+                        if metricas['paradas_media_por_veiculo'] else 0.0
+                    ),
+                    'tempo_viagem_p95_medio': (
+                        sum(metricas['tempo_viagem_p95']) / len(metricas['tempo_viagem_p95'])
+                        if metricas['tempo_viagem_p95'] else 0.0
+                    )
                 }
         return comparacao
 
-    def salvar_relatorio(self, nome_arquivo: str = None) -> str:
+    def salvar_relatorio(self, nome_arquivo: str = None, estatisticas_finais: Dict = None) -> str:
         if nome_arquivo is None:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             nome_arquivo = f"relatorio_simulacao_{timestamp}.json"
+
+        estat_final = estatisticas_finais or {}
 
         relatorio = {
             'sessao': {
@@ -90,6 +125,7 @@ class GerenciadorMetricas:
                 for h in self.metricas_por_heuristica
             },
             'comparacao_heuristicas': self.obter_comparacao(),
+            'estatisticas_finais': estat_final,
             'configuracoes': {
                 'grade': f"{CONFIG.LINHAS_GRADE}x{CONFIG.COLUNAS_GRADE}",
                 'taxa_geracao': CONFIG.TAXA_GERACAO_VEICULO,
@@ -211,7 +247,8 @@ class Simulacao:
 
     def _salvar_relatorio(self) -> None:
         try:
-            caminho = self.gerenciador_metricas.salvar_relatorio()
+            estatisticas = self.malha.obter_estatisticas()
+            caminho = self.gerenciador_metricas.salvar_relatorio(estatisticas_finais=estatisticas)
             self._mostrar_mensagem(f"Relatório salvo: {os.path.basename(caminho)}")
         except Exception as e:
             self._mostrar_mensagem(f"Erro ao salvar: {str(e)}")
@@ -226,6 +263,9 @@ class Simulacao:
             print(f"  - Tempo médio de viagem: {dados['tempo_viagem_medio']:.2f}s")
             print(f"  - Tempo médio parado: {dados['tempo_parado_medio']:.2f}s")
             print(f"  - Eficiência média: {dados['eficiencia_media']:.1f}%")
+            print(f"  - Throughput médio/min: {dados['throughput_medio_por_minuto']:.2f}")
+            print(f"  - Paradas médias/veículo: {dados['paradas_medias_por_veiculo']:.2f}")
+            print(f"  - P95 de viagem (médio): {dados['tempo_viagem_p95_medio']:.2f}s")
         self.rodando = False
 
     def _coletar_metricas(self) -> None:
@@ -272,42 +312,42 @@ class Simulacao:
 
 class SimulacaoHeadless:
     """Simulação sem interface gráfica para análise de desempenho."""
-    
-    def __init__(self, heuristica: TipoHeuristica, duracao_segundos: int, 
+
+    def __init__(self, heuristica: TipoHeuristica, duracao_segundos: int,
                  nome_arquivo: str = None, verbose: bool = False):
         self.heuristica = heuristica
         self.duracao_segundos = duracao_segundos
         self.nome_arquivo = nome_arquivo
         self.verbose = verbose
-        
+
         # Inicializa componentes
         self.malha = None
         self.gerenciador_metricas = GerenciadorMetricas()
         self.tempo_inicio = None
         self.tempo_fim = None
-        
+
         # Configurações para simulação headless
         self.fps = 60  # FPS fixo para simulação
         self.tempo_acumulado = 0.0
-        
+
     def inicializar(self):
         """Inicializa a simulação headless."""
         self.malha = MalhaViaria(CONFIG.LINHAS_GRADE, CONFIG.COLUNAS_GRADE)
         self.malha.mudar_heuristica(self.heuristica)
         self.tempo_inicio = time.time()
-        
+
         if self.verbose:
             print(f"🚀 Iniciando simulação headless com heurística: {self.heuristica.name}")
             print(f"⏱️  Duração: {self.duracao_segundos} segundos")
             print(f"📊 Grade: {CONFIG.LINHAS_GRADE}x{CONFIG.COLUNAS_GRADE}")
-    
+
     def executar(self):
         """Executa a simulação headless."""
         self.inicializar()
-        
+
         if self.verbose:
             print("🔄 Executando simulação...")
-        
+
         # Configura progress bar se tqdm estiver disponível
         if TQDM_AVAILABLE:
             progress_bar = tqdm(
@@ -318,74 +358,77 @@ class SimulacaoHeadless:
             )
         else:
             progress_bar = None
-        
+
         try:
             # Loop principal da simulação
             while True:
                 tempo_atual = time.time()
                 tempo_decorrido = tempo_atual - self.tempo_inicio
-                
+
                 # Atualiza progress bar
                 if progress_bar:
                     progress_bar.n = int(tempo_decorrido)
                     progress_bar.refresh()
-                
+
                 # Verifica se atingiu o tempo limite
                 if tempo_decorrido >= self.duracao_segundos:
                     break
-                
+
                 # Atualiza a simulação
                 dt = 1.0 / self.fps
                 self.tempo_acumulado += dt
-                
+
                 while self.tempo_acumulado >= 1.0 / CONFIG.FPS:
                     self.malha.atualizar()
                     self.tempo_acumulado -= 1.0 / CONFIG.FPS
-                    
+
                     # Coleta métricas periodicamente
                     if self.malha.metricas['tempo_simulacao'] % CONFIG.INTERVALO_METRICAS == 0:
                         self._coletar_metricas()
-                
+
                 # Pequena pausa para não sobrecarregar o CPU
                 time.sleep(0.001)
-        
+
         finally:
             if progress_bar:
                 progress_bar.close()
-        
+
         self.tempo_fim = time.time()
         self._finalizar()
-    
+
     def _coletar_metricas(self):
         """Coleta métricas da simulação."""
         estatisticas = self.malha.obter_estatisticas()
         self.gerenciador_metricas.registrar_metricas(estatisticas, self.heuristica)
-        
+
         if self.verbose and estatisticas['veiculos_concluidos'] > 0:
-            print(f"📈 Veículos concluídos: {estatisticas['veiculos_concluidos']}, "
-                  f"Tempo médio: {estatisticas['tempo_viagem_medio']:.2f}s")
-    
+            print(
+                f"📈 Veículos concluídos: {estatisticas['veiculos_concluidos']}, "
+                f"Tempo médio: {estatisticas['tempo_viagem_medio']:.2f}s, "
+                f"Throughput/min: {estatisticas.get('throughput_por_minuto', 0.0):.2f}"
+            )
+
     def _finalizar(self):
         """Finaliza a simulação e gera relatório."""
         duracao_real = self.tempo_fim - self.tempo_inicio
-        
+
         if self.verbose:
             print(f"\n✅ Simulação concluída em {duracao_real:.2f} segundos")
-        
+
         # Coleta métricas finais
         estatisticas_finais = self.malha.obter_estatisticas()
         self.gerenciador_metricas.registrar_metricas(estatisticas_finais, self.heuristica)
-        
+
         # Gera relatório
         self._gerar_relatorio(duracao_real, estatisticas_finais)
-    
+
     def _gerar_relatorio(self, duracao_real: float, estatisticas_finais: dict):
         """Gera relatório detalhado da simulação."""
         # Nome do arquivo
         if not self.nome_arquivo:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             self.nome_arquivo = f"relatorio_{self.heuristica.name.lower()}_{timestamp}.json"
-        
+
         # Dados do relatório
         relatorio = {
             'simulacao': {
@@ -402,7 +445,16 @@ class SimulacaoHeadless:
                 'tempo_viagem_medio': estatisticas_finais['tempo_viagem_medio'],
                 'tempo_parado_medio': estatisticas_finais['tempo_parado_medio'],
                 'eficiencia_media': self._calcular_eficiencia(estatisticas_finais),
-                'score_heuristica': self.gerenciador_metricas.calcular_score(self.heuristica)
+                'score_heuristica': self.gerenciador_metricas.calcular_score(self.heuristica),
+                # novas métricas exportadas, se presentes
+                'velocidade_media_global_px_s': estatisticas_finais.get('velocidade_media_global', 0.0),
+                'paradas_media_por_veiculo': estatisticas_finais.get('paradas_media_por_veiculo', 0.0),
+                'tempo_viagem_p50': estatisticas_finais.get('tempo_viagem_p50', 0.0),
+                'tempo_viagem_p95': estatisticas_finais.get('tempo_viagem_p95', 0.0),
+                'throughput_por_minuto': estatisticas_finais.get('throughput_por_minuto', 0.0),
+                'veiculos_aguardando_instante': estatisticas_finais.get('veiculos_aguardando', 0),
+                'velocidade_media_ativa': estatisticas_finais.get('velocidade_media_ativa', 0.0),
+                'maior_fila_cruzamento_atual': estatisticas_finais.get('maior_fila_cruzamento_atual', 0)
             },
             'configuracao': {
                 'taxa_geracao': CONFIG.TAXA_GERACAO_VEICULO,
@@ -411,14 +463,14 @@ class SimulacaoHeadless:
                 'intervalo_metricas': CONFIG.INTERVALO_METRICAS
             }
         }
-        
+
         # Salva o relatório
         os.makedirs('relatorios', exist_ok=True)
         caminho_completo = os.path.join('relatorios', self.nome_arquivo)
-        
+
         with open(caminho_completo, 'w', encoding='utf-8') as f:
             json.dump(relatorio, f, indent=2, ensure_ascii=False)
-        
+
         # Exibe resumo
         print(f"\n📊 RELATÓRIO DE DESEMPENHO - {self.heuristica.name}")
         print("=" * 50)
@@ -427,6 +479,8 @@ class SimulacaoHeadless:
         print(f"🕐 Tempo médio de viagem: {estatisticas_finais['tempo_viagem_medio']:.2f}s")
         print(f"⏸️  Tempo médio parado: {estatisticas_finais['tempo_parado_medio']:.2f}s")
         print(f"📈 Eficiência: {self._calcular_eficiencia(estatisticas_finais):.1f}%")
+        print(f"⚡ Throughput/min: {estatisticas_finais.get('throughput_por_minuto', 0.0):.2f}")
+        print(f"🚦 Veículos aguardando (instante): {estatisticas_finais.get('veiculos_aguardando', 0)}")
         print(f"⭐ Score da heurística: {self.gerenciador_metricas.calcular_score(self.heuristica):.1f}")
         print(f"💾 Relatório salvo: {caminho_completo}")
         print("=" * 50)

@@ -28,10 +28,13 @@ class GerenciadorMetricas:
                 'tempo_parado': [],
                 'veiculos_processados': 0,
                 'eficiencia': [],
-                # Séries adicionais para comparação
+                # Séries adicionais
                 'throughput_por_minuto': [],
                 'paradas_media_por_veiculo': [],
-                'tempo_viagem_p95': []
+                'tempo_viagem_p95': [],
+                # Backlog
+                'backlog_medio': [],
+                'backlog_max': []
             } for heuristica in TipoHeuristica
         }
 
@@ -44,53 +47,64 @@ class GerenciadorMetricas:
     def calcular_score(self, heuristica: TipoHeuristica) -> float:
         """
         Score composto com normalizações suaves:
-          - tm_norm = 1 / (1 + tm)           → menor tempo de viagem é melhor
-          - tp_norm = 1 / (1 + tp)           → menor tempo parado é melhor
-          - th_norm = min(1, th/60)          → referência 60 veículos/min
+          - tm_norm = 1 / (1 + tm)
+          - tp_norm = 1 / (1 + tp)
+          - th_norm = min(1, th/60)
+          - bk_norm = 1 / (1 + backlog_medio)  (penaliza backlog alto)
 
         Pesos:
-          40% tempo de viagem, 30% tempo parado, 30% throughput.
+          tm 40%, tp 25%, th 25%, backlog 10%.
         """
         m = self.metricas_por_heuristica[heuristica]
         if not m['tempo_viagem'] or not m['throughput_por_minuto']:
             return 0.0
 
-        tm = sum(m['tempo_viagem']) / len(m['tempo_viagem'])          # segundos
-        tp = sum(m['tempo_parado']) / len(m['tempo_parado'])          # segundos
-        th = sum(m['throughput_por_minuto']) / len(m['throughput_por_minuto'])  # veículos/min
+        tm = sum(m['tempo_viagem']) / len(m['tempo_viagem'])
+        tp = sum(m['tempo_parado']) / len(m['tempo_parado'])
+        th = sum(m['throughput_por_minuto']) / len(m['throughput_por_minuto'])
+        bk = (sum(m['backlog_medio']) / len(m['backlog_medio'])) if m['backlog_medio'] else 0.0
 
         tm_norm = 1.0 / (1.0 + max(0.0, tm))
         tp_norm = 1.0 / (1.0 + max(0.0, tp))
         th_norm = min(1.0, max(0.0, th) / 60.0)
+        bk_norm = 1.0 / (1.0 + max(0.0, bk))
 
-        score = (0.4 * tm_norm + 0.3 * tp_norm + 0.3 * th_norm) * 100.0
+        score = (0.40 * tm_norm + 0.25 * tp_norm + 0.25 * th_norm + 0.10 * bk_norm) * 100.0
         return score
 
     def registrar_metricas(self, estatisticas: Dict, heuristica: TipoHeuristica) -> None:
-        if estatisticas['veiculos_concluidos'] > 0:
+        if estatisticas['veiculos_concluidos'] >= 0:
             metricas = self.metricas_por_heuristica[heuristica]
-            metricas['tempo_viagem'].append(estatisticas['tempo_viagem_medio'])
-            metricas['tempo_parado'].append(estatisticas['tempo_parado_medio'])
+            # tempos médios (apenas quando houver base)
+            if estatisticas['veiculos_concluidos'] > 0:
+                metricas['tempo_viagem'].append(estatisticas['tempo_viagem_medio'])
+                metricas['tempo_parado'].append(estatisticas['tempo_parado_medio'])
+                if estatisticas['tempo_viagem_medio'] > 0:
+                    eficiencia = ((estatisticas['tempo_viagem_medio'] - estatisticas['tempo_parado_medio']) /
+                                  estatisticas['tempo_viagem_medio']) * 100
+                    metricas['eficiencia'].append(eficiencia)
             metricas['veiculos_processados'] = estatisticas['veiculos_concluidos']
-            if estatisticas['tempo_viagem_medio'] > 0:
-                eficiencia = ((estatisticas['tempo_viagem_medio'] - estatisticas['tempo_parado_medio']) /
-                              estatisticas['tempo_viagem_medio']) * 100
-                metricas['eficiencia'].append(eficiencia)
 
             # séries comparativas novas (se existirem nas estatísticas)
             metricas['throughput_por_minuto'].append(estatisticas.get('throughput_por_minuto', 0.0))
             metricas['paradas_media_por_veiculo'].append(estatisticas.get('paradas_media_por_veiculo', 0.0))
             metricas['tempo_viagem_p95'].append(estatisticas.get('tempo_viagem_p95', 0.0))
 
+            # backlog
+            metricas['backlog_medio'].append(estatisticas.get('backlog_medio', 0.0))
+            metricas['backlog_max'].append(estatisticas.get('backlog_max', 0.0))
+
     def obter_comparacao(self) -> Dict:
         comparacao = {}
         for heuristica, metricas in self.metricas_por_heuristica.items():
-            if metricas['tempo_viagem']:
+            if metricas['tempo_viagem'] or metricas['throughput_por_minuto']:
                 comparacao[heuristica.name] = {
-                    'tempo_viagem_medio': sum(metricas['tempo_viagem']) / len(metricas['tempo_viagem']),
-                    'tempo_parado_medio': sum(metricas['tempo_parado']) / len(metricas['tempo_parado']),
+                    'tempo_viagem_medio': sum(metricas['tempo_viagem']) / len(metricas['tempo_viagem'])
+                    if metricas['tempo_viagem'] else 0.0,
+                    'tempo_parado_medio': sum(metricas['tempo_parado']) / len(metricas['tempo_parado'])
+                    if metricas['tempo_parado'] else 0.0,
                     'eficiencia_media': sum(metricas['eficiencia']) / len(metricas['eficiencia'])
-                    if metricas['eficiencia'] else 0,
+                    if metricas['eficiencia'] else 0.0,
                     'veiculos_processados': metricas['veiculos_processados'],
                     'throughput_medio_por_minuto': (
                         sum(metricas['throughput_por_minuto']) / len(metricas['throughput_por_minuto'])
@@ -103,6 +117,14 @@ class GerenciadorMetricas:
                     'tempo_viagem_p95_medio': (
                         sum(metricas['tempo_viagem_p95']) / len(metricas['tempo_viagem_p95'])
                         if metricas['tempo_viagem_p95'] else 0.0
+                    ),
+                    'backlog_medio': (
+                        sum(metricas['backlog_medio']) / len(metricas['backlog_medio'])
+                        if metricas['backlog_medio'] else 0.0
+                    ),
+                    'backlog_max_medio': (
+                        sum(metricas['backlog_max']) / len(metricas['backlog_max'])
+                        if metricas['backlog_max'] else 0.0
                     )
                 }
         return comparacao
@@ -266,6 +288,8 @@ class Simulacao:
             print(f"  - Throughput médio/min: {dados['throughput_medio_por_minuto']:.2f}")
             print(f"  - Paradas médias/veículo: {dados['paradas_medias_por_veiculo']:.2f}")
             print(f"  - P95 de viagem (médio): {dados['tempo_viagem_p95_medio']:.2f}s")
+            print(f"  - Backlog médio: {dados['backlog_medio']:.2f}")
+            print(f"  - Backlog max médio: {dados['backlog_max_medio']:.2f}")
         self.rodando = False
 
     def _coletar_metricas(self) -> None:
@@ -348,7 +372,6 @@ class SimulacaoHeadless:
         if self.verbose:
             print("🔄 Executando simulação...")
 
-        # Configura progress bar se tqdm estiver disponível
         if TQDM_AVAILABLE:
             progress_bar = tqdm(
                 total=self.duracao_segundos,
@@ -360,33 +383,26 @@ class SimulacaoHeadless:
             progress_bar = None
 
         try:
-            # Loop principal da simulação
             while True:
                 tempo_atual = time.time()
                 tempo_decorrido = tempo_atual - self.tempo_inicio
 
-                # Atualiza progress bar
                 if progress_bar:
                     progress_bar.n = int(tempo_decorrido)
                     progress_bar.refresh()
 
-                # Verifica se atingiu o tempo limite
                 if tempo_decorrido >= self.duracao_segundos:
                     break
 
-                # Atualiza a simulação
                 dt = 1.0 / self.fps
                 self.tempo_acumulado += dt
 
                 while self.tempo_acumulado >= 1.0 / CONFIG.FPS:
                     self.malha.atualizar()
                     self.tempo_acumulado -= 1.0 / CONFIG.FPS
-
-                    # Coleta métricas periodicamente
                     if self.malha.metricas['tempo_simulacao'] % CONFIG.INTERVALO_METRICAS == 0:
                         self._coletar_metricas()
 
-                # Pequena pausa para não sobrecarregar o CPU
                 time.sleep(0.001)
 
         finally:
@@ -403,9 +419,10 @@ class SimulacaoHeadless:
 
         if self.verbose and estatisticas['veiculos_concluidos'] > 0:
             print(
-                f"📈 Veículos concluídos: {estatisticas['veiculos_concluidos']}, "
-                f"Tempo médio: {estatisticas['tempo_viagem_medio']:.2f}s, "
-                f"Throughput/min: {estatisticas.get('throughput_por_minuto', 0.0):.2f}"
+                f"📈 Veículos concl.: {estatisticas['veiculos_concluidos']}, "
+                f"Tempo méd.: {estatisticas['tempo_viagem_medio']:.2f}s, "
+                f"Throughput/min: {estatisticas.get('throughput_por_minuto', 0.0):.2f}, "
+                f"Backlog atual: {estatisticas.get('backlog_total', 0)}"
             )
 
     def _finalizar(self):
@@ -415,21 +432,16 @@ class SimulacaoHeadless:
         if self.verbose:
             print(f"\n✅ Simulação concluída em {duracao_real:.2f} segundos")
 
-        # Coleta métricas finais
         estatisticas_finais = self.malha.obter_estatisticas()
         self.gerenciador_metricas.registrar_metricas(estatisticas_finais, self.heuristica)
-
-        # Gera relatório
         self._gerar_relatorio(duracao_real, estatisticas_finais)
 
     def _gerar_relatorio(self, duracao_real: float, estatisticas_finais: dict):
         """Gera relatório detalhado da simulação."""
-        # Nome do arquivo
         if not self.nome_arquivo:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             self.nome_arquivo = f"relatorio_{self.heuristica.name.lower()}_{timestamp}.json"
 
-        # Dados do relatório
         relatorio = {
             'simulacao': {
                 'heuristica': self.heuristica.name,
@@ -446,7 +458,7 @@ class SimulacaoHeadless:
                 'tempo_parado_medio': estatisticas_finais['tempo_parado_medio'],
                 'eficiencia_media': self._calcular_eficiencia(estatisticas_finais),
                 'score_heuristica': self.gerenciador_metricas.calcular_score(self.heuristica),
-                # novas métricas exportadas, se presentes
+                # extras (se presentes)
                 'velocidade_media_global_px_s': estatisticas_finais.get('velocidade_media_global', 0.0),
                 'paradas_media_por_veiculo': estatisticas_finais.get('paradas_media_por_veiculo', 0.0),
                 'tempo_viagem_p50': estatisticas_finais.get('tempo_viagem_p50', 0.0),
@@ -454,39 +466,49 @@ class SimulacaoHeadless:
                 'throughput_por_minuto': estatisticas_finais.get('throughput_por_minuto', 0.0),
                 'veiculos_aguardando_instante': estatisticas_finais.get('veiculos_aguardando', 0),
                 'velocidade_media_ativa': estatisticas_finais.get('velocidade_media_ativa', 0.0),
-                'maior_fila_cruzamento_atual': estatisticas_finais.get('maior_fila_cruzamento_atual', 0)
+                'maior_fila_cruzamento_atual': estatisticas_finais.get('maior_fila_cruzamento_atual', 0),
+                # backlog
+                'backlog_total_atual': estatisticas_finais.get('backlog_total', 0),
+                'backlog_max_total': estatisticas_finais.get('backlog_max', 0),
+                'backlog_gerado_total': estatisticas_finais.get('backlog_gerado_total', 0),
+                'backlog_despachado_total': estatisticas_finais.get('backlog_despachado_total', 0),
+                'backlog_medio': estatisticas_finais.get('backlog_medio', 0.0),
             },
             'configuracao': {
                 'taxa_geracao': CONFIG.TAXA_GERACAO_VEICULO,
                 'velocidade_max': CONFIG.VELOCIDADE_MAX_VEICULO,
                 'fps_simulacao': CONFIG.FPS,
-                'intervalo_metricas': CONFIG.INTERVALO_METRICAS
+                'intervalo_metricas': CONFIG.INTERVALO_METRICAS,
+                'backlog': {
+                    'ativo': CONFIG.BACKLOG_ATIVO,
+                    'limite_global': CONFIG.BACKLOG_TAMANHO_MAX,
+                    'flush_por_frame': CONFIG.BACKLOG_FLUSH_MAX_POR_FRAME
+                }
             }
         }
 
-        # Salva o relatório
         os.makedirs('relatorios', exist_ok=True)
         caminho_completo = os.path.join('relatorios', self.nome_arquivo)
-
         with open(caminho_completo, 'w', encoding='utf-8') as f:
             json.dump(relatorio, f, indent=2, ensure_ascii=False)
 
-        # Exibe resumo
         print(f"\n📊 RELATÓRIO DE DESEMPENHO - {self.heuristica.name}")
         print("=" * 50)
         print(f"⏱️  Duração: {duracao_real:.2f}s (solicitado: {self.duracao_segundos}s)")
         print(f"🚗 Veículos processados: {estatisticas_finais['veiculos_concluidos']}")
         print(f"🕐 Tempo médio de viagem: {estatisticas_finais['tempo_viagem_medio']:.2f}s")
         print(f"⏸️  Tempo médio parado: {estatisticas_finais['tempo_parado_medio']:.2f}s")
-        print(f"📈 Eficiência: {self._calcular_eficiencia(estatisticas_finais):.1f}%")
         print(f"⚡ Throughput/min: {estatisticas_finais.get('throughput_por_minuto', 0.0):.2f}")
-        print(f"🚦 Veículos aguardando (instante): {estatisticas_finais.get('veiculos_aguardando', 0)}")
-        print(f"⭐ Score da heurística: {self.gerenciador_metricas.calcular_score(self.heuristica):.1f}")
+        print(f"📦 Backlog atual: {estatisticas_finais.get('backlog_total', 0)} | "
+              f"máx: {estatisticas_finais.get('backlog_max', 0)} | "
+              f"médio: {estatisticas_finais.get('backlog_medio', 0.0):.2f}")
+        print(f"🔁 Backlog gerado: {estatisticas_finais.get('backlog_gerado_total', 0)} | "
+              f"despachado: {estatisticas_finais.get('backlog_despachado_total', 0)}")
+        print(f"⭐ Score: {self.gerenciador_metricas.calcular_score(self.heuristica):.1f}")
         print(f"💾 Relatório salvo: {caminho_completo}")
         print("=" * 50)
-    
+
     def _calcular_eficiencia(self, estatisticas: dict) -> float:
-        """Calcula a eficiência baseada no tempo de viagem e parado."""
         if estatisticas['tempo_viagem_medio'] > 0:
             return ((estatisticas['tempo_viagem_medio'] - estatisticas['tempo_parado_medio']) / 
                    estatisticas['tempo_viagem_medio']) * 100

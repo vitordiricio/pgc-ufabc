@@ -158,6 +158,11 @@ class Configuracao:
     COLETAR_METRICAS: bool = True
     INTERVALO_METRICAS: int = 300  # 5 segundos
 
+    # ---------- BACKLOG DE SPAWN ----------
+    BACKLOG_ATIVO: bool = True
+    BACKLOG_TAMANHO_MAX: int = 10000        # limite de segurança global
+    BACKLOG_FLUSH_MAX_POR_FRAME: int = 3    # limite de quantos do backlog tentar despachar por frame por direção
+
     # Posição inicial da malha
     MARGEM_TELA: int = 100
 

@@ -32,6 +32,14 @@ class Cruzamento:
             Direcao.LESTE: []   # Leste→Oeste
         }
 
+        # -------- BACKLOG por entrada --------
+        self.backlog_por_direcao: Dict[Direcao, int] = {
+            Direcao.NORTE: 0,
+            Direcao.LESTE: 0
+        }
+        self.backlog_gerado_total = 0
+        self.backlog_despachado_total = 0
+
         self.largura_rua = CONFIG.LARGURA_RUA
         self.limites = self._calcular_limites()
         self._configurar_semaforos()
@@ -42,6 +50,9 @@ class Cruzamento:
             'tempo_espera_acumulado': 0,
             'densidade_atual': 0
         }
+
+    def backlog_total(self) -> int:
+        return sum(self.backlog_por_direcao.values())
 
     def _calcular_limites(self) -> Dict[str, float]:
         margem = self.largura_rua // 2
@@ -70,15 +81,13 @@ class Cruzamento:
     def _centro_faixa(self, direcao: Direcao, idx: int) -> Tuple[float, float]:
         idx = max(0, min(idx, CONFIG.FAIXAS_POR_VIA - 1))
         if direcao == Direcao.LESTE:
-            # faixa horizontal: varia em Y
             y = self.centro_y - CONFIG.LARGURA_RUA / 2 + (idx + 0.5) * CONFIG.LARGURA_FAIXA
             return (None, y)
         else:
-            # faixa vertical: varia em X
             x = self.centro_x - CONFIG.LARGURA_RUA / 2 + (idx + 0.5) * CONFIG.LARGURA_FAIXA
             return (x, None)
 
-    # ---------- geração ----------
+    # ---------- geração + BACKLOG ----------
     def pode_gerar_veiculo(self, direcao: Direcao) -> bool:
         if direcao not in CONFIG.DIRECOES_PERMITIDAS:
             return False
@@ -91,27 +100,72 @@ class Cruzamento:
         }
         return pode_gerar.get(direcao, False)
 
-    def gerar_veiculos(self) -> List[Veiculo]:
-        novos_veiculos = []
+    def _registrar_chegada(self, direcao: Direcao, qtd: int = 1) -> int:
+        """Registra chegada de requisições de geração na fila (backlog). Retorna o que foi aceito."""
+        if not CONFIG.BACKLOG_ATIVO or qtd <= 0:
+            return 0
+        antes = self.backlog_total()
+        if antes >= CONFIG.BACKLOG_TAMANHO_MAX:
+            return 0
+        aceita = min(qtd, CONFIG.BACKLOG_TAMANHO_MAX - antes)
+        self.backlog_por_direcao[direcao] += aceita
+        self.backlog_gerado_total += aceita
+        return aceita
+
+    def _tentar_spawn(self, direcao: Direcao, faixa: int) -> Veiculo | None:
+        """Tenta criar 1 veículo na faixa informada se houver espaço."""
+        if direcao == Direcao.NORTE:
+            x, _ = self._centro_faixa(Direcao.NORTE, faixa)
+            posicao = (x, -50)
+        else:
+            _, y = self._centro_faixa(Direcao.LESTE, faixa)
+            posicao = (-50, y)
+        if self._tem_espaco_para_gerar(direcao, posicao, faixa):
+            v = Veiculo(direcao, posicao, self.id)
+            v.indice_faixa = faixa
+            self.veiculos_por_direcao[direcao].append(v)
+            return v
+        return None
+
+    def gerar_veiculos(self) -> Tuple[List[Veiculo], int, int]:
+        """
+        Gera veículos com suporte a backlog por entrada.
+        Retorna: (novos_veiculos, chegadas_registradas, backlog_despachado)
+        """
+        novos_veiculos: List[Veiculo] = []
+        chegadas_total = 0
+        despachados_total = 0
+
         for direcao in CONFIG.DIRECOES_PERMITIDAS:
             if not self.pode_gerar_veiculo(direcao):
                 continue
-            if random.random() < CONFIG.TAXA_GERACAO_VEICULO:
-                # escolhe faixa aleatória
-                faixa = random.randint(0, CONFIG.FAIXAS_POR_VIA - 1)
-                if direcao == Direcao.NORTE:
-                    x, _ = self._centro_faixa(Direcao.NORTE, faixa)
-                    posicao = (x, -50)
-                else:
-                    _, y = self._centro_faixa(Direcao.LESTE, faixa)
-                    posicao = (-50, y)
 
-                if self._tem_espaco_para_gerar(direcao, posicao, faixa):
-                    veiculo = Veiculo(direcao, posicao, self.id)
-                    veiculo.indice_faixa = faixa
-                    novos_veiculos.append(veiculo)
-                    self.veiculos_por_direcao[direcao].append(veiculo)
-        return novos_veiculos
+            # 1) chegada estocástica → vira backlog
+            if random.random() < CONFIG.TAXA_GERACAO_VEICULO:
+                chegadas_total += self._registrar_chegada(direcao, 1)
+
+            # 2) tenta escoar uma parte do backlog (limite por frame)
+            flush_restantes = CONFIG.BACKLOG_FLUSH_MAX_POR_FRAME
+            while CONFIG.BACKLOG_ATIVO and self.backlog_por_direcao[direcao] > 0 and flush_restantes > 0:
+                # tenta em faixas diferentes para achar espaço
+                faixas = list(range(CONFIG.FAIXAS_POR_VIA))
+                random.shuffle(faixas)
+                spawned = False
+                for faixa in faixas:
+                    v = self._tentar_spawn(direcao, faixa)
+                    if v is not None:
+                        novos_veiculos.append(v)
+                        self.backlog_por_direcao[direcao] -= 1
+                        self.backlog_despachado_total += 1
+                        despachados_total += 1
+                        flush_restantes -= 1
+                        spawned = True
+                        break
+                if not spawned:
+                    # sem espaço em nenhuma faixa nesse frame
+                    break
+
+        return novos_veiculos, chegadas_total, despachados_total
 
     def _tem_espaco_para_gerar(self, direcao, posicao, faixa) -> bool:
         for v in self.veiculos_por_direcao.get(direcao, []):
@@ -284,13 +338,12 @@ class MalhaViaria:
             'veiculos_concluidos': 0,
             'tempo_viagem_total': 0,
             'tempo_parado_total': 0,
-            # ---- NOVOS AGREGADOS / SÉRIES ----
-            'paradas_totais_total': 0,
-            'distancia_total': 0.0,
-            'tempos_viagem': [],       # lista de tempos de viagem (s) por veículo concluído
-            'tempos_parado': [],       # lista de tempos parados (s)
-            'paradas_por_viagem': [],  # lista de #paradas por veículo
-            'distancias': []           # lista de distâncias percorridas (px)
+            # backlog
+            'backlog_atual_total': 0,
+            'backlog_max_total': 0,
+            'backlog_gerado_total': 0,
+            'backlog_despachado_total': 0,
+            'backlog_amostras_acum': 0  # para média
         }
 
     # -------------------
@@ -355,11 +408,7 @@ class MalhaViaria:
 
     # --------- PERF: vizinhos por (via, faixa) em O(N) ----------
     def _construir_vizinhos_por_faixa(self) -> None:
-        """
-        Para cada (direção, via, faixa), ordena veículos por coordenada longitudinal
-        e preenche caches _leader_cache/_follower_cache nos veículos.
-        """
-        buckets = {}  # (direcao, via_idx, faixa_idx) -> list[(long, veh)]
+        buckets = {}
 
         def via_idx_de(v: Veiculo) -> int:
             if v.direcao == Direcao.LESTE:
@@ -393,11 +442,18 @@ class MalhaViaria:
         self.metricas['tempo_simulacao'] += 1
         self.atualizar_caos()
 
-        # Gera novos veículos
+        # Gera novos veículos + backlog
+        frame_chegadas = 0
+        frame_despachados = 0
         for cruzamento in self.cruzamentos.values():
-            novos_veiculos = cruzamento.gerar_veiculos()
+            novos_veiculos, chegadas, despachados = cruzamento.gerar_veiculos()
             self.veiculos.extend(novos_veiculos)
             self.metricas['veiculos_total'] += len(novos_veiculos)
+            frame_chegadas += chegadas
+            frame_despachados += despachados
+
+        self.metricas['backlog_gerado_total'] += frame_chegadas
+        self.metricas['backlog_despachado_total'] += frame_despachados
 
         # PERF: pré-calcula vizinhos por faixa (O(N))
         self._construir_vizinhos_por_faixa()
@@ -422,41 +478,18 @@ class MalhaViaria:
                 self.metricas['veiculos_concluidos'] += 1
                 self.metricas['tempo_viagem_total'] += veiculo.tempo_viagem
                 self.metricas['tempo_parado_total'] += veiculo.tempo_parado
-                # ---- NOVOS ACUMULADORES/SÉRIES ----
-                self.metricas['paradas_totais_total'] += veiculo.paradas_totais
-                self.metricas['distancia_total'] += veiculo.distancia_percorrida
-                self.metricas['tempos_viagem'].append(veiculo.tempo_viagem)
-                self.metricas['tempos_parado'].append(veiculo.tempo_parado)
-                self.metricas['paradas_por_viagem'].append(veiculo.paradas_totais)
-                self.metricas['distancias'].append(veiculo.distancia_percorrida)
 
         self.veiculos = veiculos_ativos
 
+        # Atualiza backlog atual / máximo
+        backlog_atual = sum(c.backlog_total() for c in self.cruzamentos.values())
+        self.metricas['backlog_atual_total'] = backlog_atual
+        if backlog_atual > self.metricas['backlog_max_total']:
+            self.metricas['backlog_max_total'] = backlog_atual
+        self.metricas['backlog_amostras_acum'] += backlog_atual
+
     def mudar_heuristica(self, nova_heuristica: TipoHeuristica) -> None:
         self.gerenciador_semaforos.mudar_heuristica(nova_heuristica)
-
-    # --------- helpers internos para estatística instantânea ----------
-    def _cruzamento_id_para_posicao(self, pos: Tuple[float, float]) -> Tuple[int, int]:
-        x, y = pos
-        coluna = int((x - CONFIG.POSICAO_INICIAL_X + CONFIG.ESPACAMENTO_HORIZONTAL / 2) / CONFIG.ESPACAMENTO_HORIZONTAL)
-        linha = int((y - CONFIG.POSICAO_INICIAL_Y + CONFIG.ESPACAMENTO_VERTICAL / 2) / CONFIG.ESPACAMENTO_VERTICAL)
-        coluna = max(0, min(coluna, CONFIG.COLUNAS_GRADE - 1))
-        linha = max(0, min(linha, CONFIG.LINHAS_GRADE - 1))
-        return (linha, coluna)
-
-    def _maior_fila_atual(self) -> int:
-        """
-        Retorna a maior fila atual entre todos os cruzamentos (conta veículos em
-        espera de semáforo, fora da caixa de interseção).
-        """
-        # Aproximação: conta veículos aguardando_semaforo e associa ao cruzamento
-        filas: Dict[Tuple[int, int], int] = {}
-        for v in self.veiculos:
-            if not v.aguardando_semaforo or v.no_cruzamento:
-                continue
-            cid = self._cruzamento_id_para_posicao(tuple(v.posicao))
-            filas[cid] = filas.get(cid, 0) + 1
-        return max(filas.values()) if filas else 0
 
     def obter_estatisticas(self) -> Dict[str, any]:
         veiculos_ativos = len(self.veiculos)
@@ -466,46 +499,17 @@ class MalhaViaria:
             tempo_viagem_medio = self.metricas['tempo_viagem_total'] / self.metricas['veiculos_concluidos'] / CONFIG.FPS
             tempo_parado_medio = self.metricas['tempo_parado_total'] / self.metricas['veiculos_concluidos'] / CONFIG.FPS
 
-        # ---- NOVAS MÉTRICAS DERIVADAS (com base em acumuladores) ----
-        tempo_sim_s = self.metricas['tempo_simulacao'] / CONFIG.FPS
-        velocidade_media_global = 0.0
-        if self.metricas['tempo_viagem_total'] > 0:
-            # distância (px) / tempo (frames) -> px/frame. Convertemos para px/s multiplicando FPS.
-            v_px_por_frame = self.metricas['distancia_total'] / max(1e-9, self.metricas['tempo_viagem_total'])
-            velocidade_media_global = v_px_por_frame * CONFIG.FPS
+        # Throughput por minuto (aprox): concluídos em 60s mais recentes não está armazenado,
+        # então usamos taxa média até agora.
+        sim_t = max(1.0, self.metricas['tempo_simulacao'] / CONFIG.FPS)
+        throughput_por_minuto = (self.metricas['veiculos_concluidos'] / sim_t) * 60.0
 
-        paradas_media_por_veiculo = (
-            sum(self.metricas['paradas_por_viagem']) / len(self.metricas['paradas_por_viagem'])
-            if self.metricas['paradas_por_viagem'] else 0.0
-        )
-
-        def _percentil(vals: List[float], p: float) -> float:
-            if not vals:
-                return 0.0
-            arr = sorted(vals)
-            k = (len(arr) - 1) * p
-            f = math.floor(k)
-            c = math.ceil(k)
-            if f == c:
-                return arr[int(k)]
-            return arr[f] + (arr[c] - arr[f]) * (k - f)
-
-        tempo_viagem_p50 = _percentil(self.metricas['tempos_viagem'], 0.50)
-        tempo_viagem_p95 = _percentil(self.metricas['tempos_viagem'], 0.95)
-        # já em segundos? self.metricas['tempos_viagem'] está em frames acumulados convertidos?
-        # Observação: guardamos em 'atualizar' diretamente 'veiculo.tempo_viagem' que está em "passos dt (=frames)"
-        # Lá foi somado com dt=1 por atualização (vide Veiculo.atualizar). Para manter consistência, convertemos aqui:
-        tempo_viagem_p50 /= CONFIG.FPS
-        tempo_viagem_p95 /= CONFIG.FPS
-
-        throughput_por_minuto = (self.metricas['veiculos_concluidos'] / (tempo_sim_s / 60)) if tempo_sim_s > 0 else 0.0
-
-        veiculos_aguardando = sum(1 for v in self.veiculos if v.aguardando_semaforo and not v.no_cruzamento)
-        velocidade_media_ativa = (
-            sum(v.velocidade for v in self.veiculos) / veiculos_ativos if veiculos_ativos > 0 else 0.0
-        )
-
-        maior_fila_cruzamento_atual = self._maior_fila_atual()
+        # Estatísticas do backlog
+        backlog_atual = self.metricas['backlog_atual_total']
+        backlog_max = self.metricas['backlog_max_total']
+        backlog_gerado = self.metricas['backlog_gerado_total']
+        backlog_desp = self.metricas['backlog_despachado_total']
+        backlog_media = self.metricas['backlog_amostras_acum'] / max(1, self.metricas['tempo_simulacao'])
 
         return {
             'veiculos_ativos': veiculos_ativos,
@@ -514,14 +518,13 @@ class MalhaViaria:
             'tempo_viagem_medio': tempo_viagem_medio,
             'tempo_parado_medio': tempo_parado_medio,
             'heuristica': self.gerenciador_semaforos.obter_info_heuristica(),
-            'tempo_simulacao': tempo_sim_s,
-            # ---- NOVAS CHAVES ----
-            'velocidade_media_global': velocidade_media_global,          # px/s
-            'paradas_media_por_veiculo': paradas_media_por_veiculo,
-            'tempo_viagem_p50': tempo_viagem_p50,                       # s
-            'tempo_viagem_p95': tempo_viagem_p95,                       # s
+            'tempo_simulacao': self.metricas['tempo_simulacao'] / CONFIG.FPS,
+            # novas métricas já usadas antes
             'throughput_por_minuto': throughput_por_minuto,
-            'veiculos_aguardando': veiculos_aguardando,
-            'velocidade_media_ativa': velocidade_media_ativa,           # px/frame (interno), mas útil relativa
-            'maior_fila_cruzamento_atual': maior_fila_cruzamento_atual
+            # backlog
+            'backlog_total': backlog_atual,
+            'backlog_max': backlog_max,
+            'backlog_gerado_total': backlog_gerado,
+            'backlog_despachado_total': backlog_desp,
+            'backlog_medio': backlog_media
         }

@@ -345,6 +345,10 @@ class MalhaViaria:
             'backlog_despachado_total': 0,
             'backlog_amostras_acum': 0  # para média
         }
+        # ---- NOVO: séries/contadores para métricas que estavam zeradas ----
+        self._tempos_viagem_concluidos_s = []     # em segundos (já dividido por FPS)
+        self._paradas_total_concluidos = 0        # soma de paradas dos que saíram
+        self._paradas_veiculos_concluidos = 0     # quantidade de veículos considerados em paradas
 
     # -------------------
     # EFEITO CAOS - ruas
@@ -438,6 +442,38 @@ class MalhaViaria:
                 v._leader_cache = arr[i + 1][1] if i + 1 < n else None
                 v._follower_cache = arr[i - 1][1] if i - 1 >= 0 else None
 
+    # ---- helpers para métricas instantâneas ----
+    @staticmethod
+    def _speed_of(v: Veiculo) -> float:
+        # tenta várias convenções comuns
+        if hasattr(v, 'velocidade'):
+            return float(v.velocidade)
+        if hasattr(v, 'velocidade_atual'):
+            return float(v.velocidade_atual)
+        if hasattr(v, 'vx') and hasattr(v, 'vy'):
+            try:
+                return math.hypot(float(v.vx), float(v.vy))
+            except Exception:
+                return 0.0
+        # fallback: moveu no frame? (se o Veiculo tiver delta armazenado)
+        return float(getattr(v, 'speed', 0.0))
+
+    @staticmethod
+    def _percentil(valores: List[float], p: float) -> float:
+        if not valores:
+            return 0.0
+        arr = sorted(valores)
+        if len(arr) == 1:
+            return arr[0]
+        k = (len(arr) - 1) * p
+        f = math.floor(k)
+        c = math.ceil(k)
+        if f == c:
+            return arr[int(k)]
+        d0 = arr[f] * (c - k)
+        d1 = arr[c] * (k - f)
+        return d0 + d1
+
     def atualizar(self) -> None:
         self.metricas['tempo_simulacao'] += 1
         self.atualizar_caos()
@@ -462,6 +498,19 @@ class MalhaViaria:
         for cruzamento in self.cruzamentos.values():
             cruzamento.atualizar_veiculos(self.veiculos)
 
+        # ---- NOVO: detectar início de parada (para contar "paradas") ----
+        # Regra: conta quando transita de "em movimento" -> "parado".
+        # Critério de parado: speed <= 1e-3 OU atributo v.parado True
+        for v in self.veiculos:
+            if not v.ativo:
+                continue
+            speed = self._speed_of(v)
+            moving = speed > 1e-3 and not getattr(v, 'parado', False)
+            was_moving = getattr(v, '_was_moving', True)
+            if was_moving and not moving:
+                v._stop_count = getattr(v, '_stop_count', 0) + 1
+            v._was_moving = moving
+
         # Coleta densidade para heurísticas
         densidade_por_cruzamento = {}
         for id_cruzamento, cruzamento in self.cruzamentos.items():
@@ -478,6 +527,11 @@ class MalhaViaria:
                 self.metricas['veiculos_concluidos'] += 1
                 self.metricas['tempo_viagem_total'] += veiculo.tempo_viagem
                 self.metricas['tempo_parado_total'] += veiculo.tempo_parado
+                # ---- NOVO: guardar dados para percentis e paradas ----
+                self._tempos_viagem_concluidos_s.append(veiculo.tempo_viagem / CONFIG.FPS)
+                self._paradas_total_concluidos += int(getattr(veiculo, '_stop_count',
+                                                              getattr(veiculo, 'numero_paradas', 0)))
+                self._paradas_veiculos_concluidos += 1
 
         self.veiculos = veiculos_ativos
 
@@ -493,16 +547,54 @@ class MalhaViaria:
 
     def obter_estatisticas(self) -> Dict[str, any]:
         veiculos_ativos = len(self.veiculos)
-        tempo_viagem_medio = 0
-        tempo_parado_medio = 0
-        if self.metricas['veiculos_concluidos'] > 0:
-            tempo_viagem_medio = self.metricas['tempo_viagem_total'] / self.metricas['veiculos_concluidos'] / CONFIG.FPS
-            tempo_parado_medio = self.metricas['tempo_parado_total'] / self.metricas['veiculos_concluidos'] / CONFIG.FPS
 
-        # Throughput por minuto (aprox): concluídos em 60s mais recentes não está armazenado,
-        # então usamos taxa média até agora.
+        # tempos médios concluídos
+        tempo_viagem_medio = 0.0
+        tempo_parado_medio = 0.0
+        if self.metricas['veiculos_concluidos'] > 0:
+            tempo_viagem_medio = (self.metricas['tempo_viagem_total'] /
+                                  self.metricas['veiculos_concluidos'] / CONFIG.FPS)
+            tempo_parado_medio = (self.metricas['tempo_parado_total'] /
+                                  self.metricas['veiculos_concluidos'] / CONFIG.FPS)
+
+        # Throughput por minuto (média no período)
         sim_t = max(1.0, self.metricas['tempo_simulacao'] / CONFIG.FPS)
         throughput_por_minuto = (self.metricas['veiculos_concluidos'] / sim_t) * 60.0
+
+        # ---- NOVO: velocidades médias instantâneas ----
+        speeds = [self._speed_of(v) for v in self.veiculos]
+        velocidade_media_global = sum(speeds) / len(speeds) if speeds else 0.0
+        speeds_ativas = [s for s in speeds if s > 1e-3 and not getattr(self.veiculos[speeds.index(s)], 'parado', False)]
+        # Para não depender do index acima (caso duplicatas), refazemos:
+        speeds_ativas = []
+        for v in self.veiculos:
+            s = self._speed_of(v)
+            if s > 1e-3 and not getattr(v, 'parado', False):
+                speeds_ativas.append(s)
+        velocidade_media_ativa = sum(speeds_ativas) / len(speeds_ativas) if speeds_ativas else 0.0
+
+        # ---- NOVO: veículos aguardando (parados/aguardando semáforo) ----
+        veiculos_aguardando = 0
+        for v in self.veiculos:
+            if getattr(v, 'parado', False) or getattr(v, 'aguardando_semaforo', False):
+                veiculos_aguardando += 1
+
+        # ---- NOVO: maior fila por cruzamento (aproximação: carros associados ao cruzamento) ----
+        maior_fila = 0
+        for cruz in self.cruzamentos.values():
+            fila_cruz = sum(len(cruz.veiculos_por_direcao.get(d, [])) for d in CONFIG.DIRECOES_PERMITIDAS)
+            if fila_cruz > maior_fila:
+                maior_fila = fila_cruz
+
+        # ---- NOVO: percentis de tempo de viagem ----
+        p50 = self._percentil(self._tempos_viagem_concluidos_s, 0.50)
+        p95 = self._percentil(self._tempos_viagem_concluidos_s, 0.95)
+
+        # ---- NOVO: paradas médias por veículo concluído ----
+        if self._paradas_veiculos_concluidos > 0:
+            paradas_media = self._paradas_total_concluidos / self._paradas_veiculos_concluidos
+        else:
+            paradas_media = 0.0
 
         # Estatísticas do backlog
         backlog_atual = self.metricas['backlog_atual_total']
@@ -519,8 +611,15 @@ class MalhaViaria:
             'tempo_parado_medio': tempo_parado_medio,
             'heuristica': self.gerenciador_semaforos.obter_info_heuristica(),
             'tempo_simulacao': self.metricas['tempo_simulacao'] / CONFIG.FPS,
-            # novas métricas já usadas antes
             'throughput_por_minuto': throughput_por_minuto,
+            # ---- NOVAS/ARRUMADAS ----
+            'velocidade_media_global': velocidade_media_global,
+            'velocidade_media_ativa': velocidade_media_ativa,
+            'veiculos_aguardando': veiculos_aguardando,
+            'maior_fila_cruzamento_atual': maior_fila,
+            'tempo_viagem_p50': p50,
+            'tempo_viagem_p95': p95,
+            'paradas_media_por_veiculo': paradas_media,
             # backlog
             'backlog_total': backlog_atual,
             'backlog_max': backlog_max,

@@ -5,7 +5,7 @@ Implementa padrão Strategy para diferentes algoritmos de controle.
 from abc import ABC, abstractmethod
 from typing import Dict, Tuple, TYPE_CHECKING
 import random
-from configuracao import TipoHeuristica, EstadoSemaforo, Direcao
+from configuracao import TipoHeuristica, EstadoSemaforo, Direcao, CONFIG
 
 if TYPE_CHECKING:
     from semaforo import Semaforo
@@ -187,6 +187,231 @@ class HeuristicaManual(Heuristica):
             self._verificar_alternancia_mao_unica(semaforos_cruzamento)
 
 
+class HeuristicaAdaptativaDensidade(Heuristica):
+    """
+    Heurística adaptativa baseada em densidade de veículos.
+    Ajusta dinamicamente os tempos dos semáforos baseado na densidade atual e histórica.
+    """
+    
+    def _inicializar_config(self) -> Dict:
+        """Inicializa configurações para controle adaptativo de densidade."""
+        return {
+            'intervalo_avaliacao': 60,  # Avalia densidade a cada 1 segundo
+            'tempo_desde_avaliacao': 0,
+            'historico_densidade': {},  # Histórico de densidade por cruzamento
+            'tempos_base': {
+                'verde_minimo': 90,    # 1.5 segundos mínimo
+                'verde_maximo': 360,   # 6 segundos máximo
+                'verde_padrao': 180,   # 3 segundos padrão
+                'amarelo': 60,         # 1 segundo
+                'vermelho_minimo': 120 # 2 segundos mínimo
+            },
+            'limiares_densidade': {
+                'baixa': 2,    # 0-2 veículos
+                'media': 5,    # 3-5 veículos
+                'alta': 8      # 6+ veículos
+            },
+            'fatores_ajuste': {
+                'baixa': 0.7,   # Reduz tempo em 30%
+                'media': 1.0,   # Tempo padrão
+                'alta': 1.5     # Aumenta tempo em 50%
+            },
+            'prioridade_zones': {},  # Zonas de prioridade por cruzamento
+            'tempo_ultima_mudanca': {}  # Controle de mudanças frequentes
+        }
+    
+    def atualizar(self, semaforos: Dict[Tuple[int, int], Dict[Direcao, 'Semaforo']], 
+                  densidade_por_cruzamento: Dict[Tuple[int, int], Dict[Direcao, int]]) -> None:
+        """Atualização adaptativa baseada em densidade."""
+        self.config['tempo_desde_avaliacao'] += 1
+        
+        # Verifica se é hora de avaliar e ajustar
+        if self.config['tempo_desde_avaliacao'] >= self.config['intervalo_avaliacao']:
+            self._avaliar_e_ajustar_densidade(semaforos, densidade_por_cruzamento)
+            self.config['tempo_desde_avaliacao'] = 0
+        
+        # Atualiza todos os semáforos normalmente
+        for id_cruzamento, semaforos_cruzamento in semaforos.items():
+            for semaforo in semaforos_cruzamento.values():
+                semaforo.atualizar()
+            self._verificar_alternancia_mao_unica(semaforos_cruzamento)
+    
+    def _avaliar_e_ajustar_densidade(self, semaforos: Dict[Tuple[int, int], Dict[Direcao, 'Semaforo']], 
+                                   densidade_por_cruzamento: Dict[Tuple[int, int], Dict[Direcao, int]]) -> None:
+        """Avalia densidade atual e ajusta tempos dos semáforos."""
+        for id_cruzamento, semaforos_cruzamento in semaforos.items():
+            densidade = densidade_por_cruzamento.get(id_cruzamento, {})
+            
+            # Atualiza histórico de densidade
+            self._atualizar_historico_densidade(id_cruzamento, densidade)
+            
+            # Calcula densidade média e tendência
+            densidade_media, tendencia = self._calcular_metricas_densidade(id_cruzamento)
+            
+            # Determina prioridade do cruzamento
+            prioridade = self._calcular_prioridade_cruzamento(id_cruzamento, densidade_media, tendencia)
+            
+            # Ajusta tempos baseado na densidade e prioridade
+            self._ajustar_tempos_semaforos(semaforos_cruzamento, densidade, prioridade)
+    
+    def _atualizar_historico_densidade(self, id_cruzamento: Tuple[int, int], 
+                                     densidade_atual: Dict[Direcao, int]) -> None:
+        """Atualiza o histórico de densidade para um cruzamento."""
+        if id_cruzamento not in self.config['historico_densidade']:
+            self.config['historico_densidade'][id_cruzamento] = {
+                Direcao.NORTE: [],
+                Direcao.LESTE: []
+            }
+        
+        # Adiciona densidade atual ao histórico (mantém últimos 10 registros)
+        for direcao in [Direcao.NORTE, Direcao.LESTE]:
+            historico = self.config['historico_densidade'][id_cruzamento][direcao]
+            historico.append(densidade_atual.get(direcao, 0))
+            if len(historico) > 10:
+                historico.pop(0)
+    
+    def _calcular_metricas_densidade(self, id_cruzamento: Tuple[int, int]) -> Tuple[float, str]:
+        """Calcula densidade média e tendência para um cruzamento."""
+        if id_cruzamento not in self.config['historico_densidade']:
+            return 0.0, 'estavel'
+        
+        historico = self.config['historico_densidade'][id_cruzamento]
+        
+        # Calcula densidade total média (NORTE + LESTE)
+        densidade_total = []
+        for direcao in [Direcao.NORTE, Direcao.LESTE]:
+            if historico[direcao]:
+                densidade_total.extend(historico[direcao])
+        
+        if not densidade_total:
+            return 0.0, 'estavel'
+        
+        densidade_media = sum(densidade_total) / len(densidade_total)
+        
+        # Calcula tendência (comparando primeiros vs últimos registros)
+        if len(densidade_total) >= 6:
+            primeira_metade = sum(densidade_total[:3]) / 3
+            segunda_metade = sum(densidade_total[-3:]) / 3
+            
+            if segunda_metade > primeira_metade * 1.2:
+                tendencia = 'crescendo'
+            elif segunda_metade < primeira_metade * 0.8:
+                tendencia = 'diminuindo'
+            else:
+                tendencia = 'estavel'
+        else:
+            tendencia = 'estavel'
+        
+        return densidade_media, tendencia
+    
+    def _calcular_prioridade_cruzamento(self, id_cruzamento: Tuple[int, int], 
+                                      densidade_media: float, tendencia: str) -> float:
+        """Calcula prioridade de um cruzamento baseado em densidade e tendência."""
+        prioridade_base = densidade_media
+        
+        # Ajusta prioridade baseado na tendência
+        if tendencia == 'crescendo':
+            prioridade_base *= 1.3  # Aumenta prioridade se densidade está crescendo
+        elif tendencia == 'diminuindo':
+            prioridade_base *= 0.8  # Diminui prioridade se densidade está diminuindo
+        
+        # Aplica prioridade de zona
+        fator_zona = self._calcular_prioridade_zona(id_cruzamento)
+        
+        return prioridade_base * fator_zona
+    
+    def _ajustar_tempos_semaforos(self, semaforos_cruzamento: Dict[Direcao, 'Semaforo'], 
+                                densidade: Dict[Direcao, int], prioridade: float) -> None:
+        """Ajusta os tempos dos semáforos baseado na densidade e prioridade."""
+        tempos_base = self.config['tempos_base']
+        limiares = self.config['limiares_densidade']
+        fatores = self.config['fatores_ajuste']
+        
+        # Determina qual direção tem mais veículos
+        densidade_norte = densidade.get(Direcao.NORTE, 0)
+        densidade_leste = densidade.get(Direcao.LESTE, 0)
+        
+        # Calcula fator de ajuste baseado na densidade
+        densidade_total = densidade_norte + densidade_leste
+        if densidade_total <= limiares['baixa']:
+            fator_densidade = fatores['baixa']
+        elif densidade_total <= limiares['media']:
+            fator_densidade = fatores['media']
+        else:
+            fator_densidade = fatores['alta']
+        
+        # Aplica fator de prioridade
+        fator_final = fator_densidade * (1.0 + prioridade * 0.1)
+        
+        # Calcula novo tempo verde
+        tempo_verde_novo = int(tempos_base['verde_padrao'] * fator_final)
+        tempo_verde_novo = max(tempos_base['verde_minimo'], 
+                              min(tempos_base['verde_maximo'], tempo_verde_novo))
+        
+        # Aplica ajustes aos semáforos
+        for direcao, semaforo in semaforos_cruzamento.items():
+            if semaforo.estado == EstadoSemaforo.VERDE:
+                # Prediz tamanho da fila para esta direção
+                fila_predita = self._prever_tamanho_fila(semaforo.id_cruzamento, direcao)
+                
+                # Ajusta tempo do verde atual
+                tempo_restante = semaforo.tempo_maximo_estado - semaforo.tempo_no_estado
+                if tempo_restante < 30:  # Se está próximo de mudar
+                    # Estende o verde se a densidade ou fila predita justifica
+                    if densidade.get(direcao, 0) > 3 or fila_predita > 4:
+                        tempo_estendido = int(tempo_verde_novo * 1.2)  # Estende 20% extra
+                        semaforo.definir_tempo_verde(tempo_estendido)
+                else:
+                    # Ajusta para o próximo ciclo baseado na fila predita
+                    if fila_predita > 6:
+                        tempo_ajustado = int(tempo_verde_novo * 1.3)  # Aumenta 30% para filas grandes
+                    elif fila_predita < 2:
+                        tempo_ajustado = int(tempo_verde_novo * 0.8)  # Reduz 20% para filas pequenas
+                    else:
+                        tempo_ajustado = tempo_verde_novo
+                    
+                    semaforo.definir_tempo_verde(tempo_ajustado)
+    
+    def _prever_tamanho_fila(self, id_cruzamento: Tuple[int, int], direcao: Direcao) -> int:
+        """Prediz o tamanho da fila baseado no histórico de densidade."""
+        if id_cruzamento not in self.config['historico_densidade']:
+            return 0
+        
+        historico = self.config['historico_densidade'][id_cruzamento][direcao]
+        if len(historico) < 3:
+            return historico[-1] if historico else 0
+        
+        # Calcula tendência simples (média móvel)
+        recente = sum(historico[-3:]) / 3
+        anterior = sum(historico[-6:-3]) / 3 if len(historico) >= 6 else recente
+        
+        # Prediz crescimento da fila
+        if recente > anterior * 1.1:
+            return int(recente * 1.2)  # Prediz crescimento de 20%
+        elif recente < anterior * 0.9:
+            return int(recente * 0.8)  # Prediz redução de 20%
+        else:
+            return int(recente)  # Mantém estável
+    
+    def _calcular_prioridade_zona(self, id_cruzamento: Tuple[int, int]) -> float:
+        """Calcula prioridade baseada na zona do cruzamento."""
+        # Zonas de prioridade: centro > bordas > cantos
+        centro_x = CONFIG.COLUNAS_GRADE // 2
+        centro_y = CONFIG.LINHAS_GRADE // 2
+        
+        distancia_centro = abs(id_cruzamento[0] - centro_x) + abs(id_cruzamento[1] - centro_y)
+        
+        # Prioridade decresce com distância do centro
+        if distancia_centro == 0:
+            return 1.2  # Centro - máxima prioridade
+        elif distancia_centro == 1:
+            return 1.0  # Adjacente ao centro
+        elif distancia_centro == 2:
+            return 0.8  # Bordas
+        else:
+            return 0.6  # Cantos
+
+
 class HeuristicaLLM(Heuristica):
     """Heurística usando LLM para controle inteligente."""
     
@@ -284,6 +509,7 @@ def criar_heuristica(tipo: TipoHeuristica) -> Heuristica:
         TipoHeuristica.VERTICAL_HORIZONTAL: HeuristicaVerticalHorizontal,
         TipoHeuristica.RANDOM_OPEN_CLOSE: HeuristicaRandomOpenClose,
         TipoHeuristica.LLM_HEURISTICA: HeuristicaLLM,
+        TipoHeuristica.ADAPTATIVA_DENSIDADE: HeuristicaAdaptativaDensidade,
         TipoHeuristica.MANUAL: HeuristicaManual
     }
     

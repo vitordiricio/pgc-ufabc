@@ -229,6 +229,7 @@ class GerenciadorSemaforos:
             TipoHeuristica.VERTICAL_HORIZONTAL: "Vertical/Horizontal",
             TipoHeuristica.RANDOM_OPEN_CLOSE: "Aleatório",
             TipoHeuristica.LLM_HEURISTICA: "LLM Inteligente",
+            TipoHeuristica.ADAPTATIVA_DENSIDADE: "Adaptativa Densidade",
             TipoHeuristica.MANUAL: "Manual"
         }
         return nomes.get(self.tipo_heuristica, "Desconhecida")

@@ -228,6 +228,8 @@ class Simulacao:
         elif evento.key == pygame.K_3:
             self._mudar_heuristica(TipoHeuristica.LLM_HEURISTICA)
         elif evento.key == pygame.K_4:
+            self._mudar_heuristica(TipoHeuristica.ADAPTATIVA_DENSIDADE)
+        elif evento.key == pygame.K_5:
             self._mudar_heuristica(TipoHeuristica.MANUAL)
         elif evento.key == pygame.K_n and self.heuristica_atual == TipoHeuristica.MANUAL:
             self.malha.gerenciador_semaforos.avancar_manual()
@@ -250,6 +252,7 @@ class Simulacao:
                 TipoHeuristica.VERTICAL_HORIZONTAL: "Vertical/Horizontal",
                 TipoHeuristica.RANDOM_OPEN_CLOSE: "Aleatório",
                 TipoHeuristica.LLM_HEURISTICA: "LLM Inteligente",
+                TipoHeuristica.ADAPTATIVA_DENSIDADE: "Adaptativa Densidade",
                 TipoHeuristica.MANUAL: "Manual"
             }
             nome_heuristica = nomes.get(nova_heuristica, "Desconhecida")

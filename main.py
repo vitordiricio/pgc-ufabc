@@ -33,6 +33,7 @@ Exemplos de uso:
   python main.py --vertical-horizontal 200   # Executa por 200s com heurística vertical/horizontal
   python main.py --random 300               # Executa por 300s com heurística aleatória
   python main.py --llm 180                  # Executa por 180s com heurística LLM
+  python main.py --adaptive 240             # Executa por 240s com heurística adaptativa de densidade
   python main.py --manual 120               # Executa por 120s com controle manual
         """
     )
@@ -48,6 +49,8 @@ Exemplos de uso:
                        help='Executa simulação por X segundos usando heurística aleatória')
     parser.add_argument('--llm', type=int, metavar='SECONDS',
                        help='Executa simulação por X segundos usando heurística LLM')
+    parser.add_argument('--adaptive', type=int, metavar='SECONDS',
+                       help='Executa simulação por X segundos usando heurística adaptativa de densidade')
     parser.add_argument('--manual', type=int, metavar='SECONDS',
                        help='Executa simulação por X segundos usando controle manual')
     
@@ -81,7 +84,7 @@ def exibir_introducao():
     print("="*60)
     print("\nControles principais:")
     print("  • ESPAÇO: Pausar/Continuar")
-    print("  • 1-4: Mudar heurística")
+    print("  • 1-5: Mudar heurística (1:Vertical/Horizontal, 2:Aleatório, 3:LLM, 4:Adaptativa, 5:Manual)")
     print("  • +/-: Ajustar velocidade")
     print("  • R: Reiniciar")
     print("  • ESC: Sair")
@@ -170,6 +173,9 @@ def main():
     elif args.llm is not None:
         executar_modo_headless(TipoHeuristica.LLM_HEURISTICA, 
                               args.llm, args.output, args.verbose)
+    elif args.adaptive is not None:
+        executar_modo_headless(TipoHeuristica.ADAPTATIVA_DENSIDADE, 
+                              args.adaptive, args.output, args.verbose)
     elif args.manual is not None:
         executar_modo_headless(TipoHeuristica.MANUAL, 
                               args.manual, args.output, args.verbose)

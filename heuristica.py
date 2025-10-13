@@ -412,6 +412,139 @@ class HeuristicaAdaptativaDensidade(Heuristica):
             return 0.6  # Cantos
 
 
+class HeuristicaReinforcementLearning(Heuristica):
+    """
+    Heurística baseada em Reinforcement Learning para controle de semáforos.
+    Usa PPO (Proximal Policy Optimization) para aprender políticas ótimas.
+    """
+    
+    def __init__(self):
+        """Inicializa a heurística RL."""
+        super().__init__()
+        self.agent = None
+        self.model_loaded = False
+        self.fallback_heuristica = None
+    
+    def _inicializar_config(self) -> Dict:
+        """Inicializa configurações para RL."""
+        return {
+            'intervalo_avaliacao': 60,  # Avalia a cada 1 segundo
+            'tempo_desde_avaliacao': 0,
+            'model_path': 'rl/models/traffic_model.zip',
+            'model_loaded': False,
+            'fallback_enabled': True
+        }
+    
+    def _load_agent(self):
+        """Carrega o agente RL."""
+        if self.model_loaded:
+            return True
+            
+        try:
+            from rl import RLTrafficAgent
+            self.agent = RLTrafficAgent(model_path=self.config['model_path'])
+            self.model_loaded = True
+            print("✅ RL Agent loaded successfully")
+            return True
+        except Exception as e:
+            print(f"❌ Failed to load RL agent: {e}")
+            if self.config['fallback_enabled']:
+                print("🔄 Using Adaptive Density as fallback")
+                self.fallback_heuristica = HeuristicaAdaptativaDensidade()
+            return False
+    
+    def atualizar(self, semaforos: Dict[Tuple[int, int], Dict[Direcao, 'Semaforo']], 
+                  densidade_por_cruzamento: Dict[Tuple[int, int], Dict[Direcao, int]]) -> None:
+        """Atualização usando RL."""
+        self.config['tempo_desde_avaliacao'] += 1
+        
+        # Tenta carregar o agente se ainda não foi carregado
+        if not self.model_loaded:
+            if not self._load_agent():
+                # Usa fallback se não conseguir carregar
+                if self.fallback_heuristica:
+                    self.fallback_heuristica.atualizar(semaforos, densidade_por_cruzamento)
+                return
+        
+        # Verifica se é hora de avaliar e tomar ação
+        if self.config['tempo_desde_avaliacao'] >= self.config['intervalo_avaliacao']:
+            self._take_rl_action(semaforos, densidade_por_cruzamento)
+            self.config['tempo_desde_avaliacao'] = 0
+        
+        # Atualiza todos os semáforos normalmente
+        for id_cruzamento, semaforos_cruzamento in semaforos.items():
+            for semaforo in semaforos_cruzamento.values():
+                semaforo.atualizar()
+            self._verificar_alternancia_mao_unica(semaforos_cruzamento)
+    
+    def _take_rl_action(self, semaforos: Dict[Tuple[int, int], Dict[Direcao, 'Semaforo']], 
+                       densidade_por_cruzamento: Dict[Tuple[int, int], Dict[Direcao, int]]) -> None:
+        """Toma ação baseada no modelo RL."""
+        try:
+            # Converte estado atual em observação
+            observation = self._get_observation(semaforos, densidade_por_cruzamento)
+            
+            # Prediz ação
+            action = self.agent.predict(observation, deterministic=True)
+            
+            # Aplica ação
+            self._apply_action(action, semaforos)
+            
+        except Exception as e:
+            print(f"❌ RL action failed: {e}")
+            # Fallback para heurística adaptativa
+            if self.fallback_heuristica:
+                self.fallback_heuristica.atualizar(semaforos, densidade_por_cruzamento)
+    
+    def _get_observation(self, semaforos: Dict[Tuple[int, int], Dict[Direcao, 'Semaforo']], 
+                        densidade_por_cruzamento: Dict[Tuple[int, int], Dict[Direcao, int]]):
+        """Converte estado atual em observação para o modelo RL."""
+        import numpy as np
+        
+        obs = []
+        
+        for id_cruzamento in sorted(semaforos.keys()):
+            semaforos_cruzamento = semaforos[id_cruzamento]
+            densidade = densidade_por_cruzamento.get(id_cruzamento, {})
+            
+            # Densidade de veículos (normalizada)
+            obs.append(min(densidade.get(Direcao.NORTE, 0), 10))
+            obs.append(min(densidade.get(Direcao.LESTE, 0), 10))
+            
+            # Estados dos semáforos (one-hot)
+            semaforo_norte = semaforos_cruzamento.get(Direcao.NORTE)
+            semaforo_leste = semaforos_cruzamento.get(Direcao.LESTE)
+            
+            obs.extend([
+                1 if semaforo_norte and semaforo_norte.estado == EstadoSemaforo.VERDE else 0,
+                1 if semaforo_leste and semaforo_leste.estado == EstadoSemaforo.VERDE else 0
+            ])
+            
+            # Tempo no estado atual (normalizado)
+            obs.extend([
+                min(semaforo_norte.tempo_no_estado if semaforo_norte else 0, 10),
+                min(semaforo_leste.tempo_no_estado if semaforo_leste else 0, 10)
+            ])
+            
+        return np.array(obs, dtype=np.float32)
+    
+    def _apply_action(self, action, semaforos: Dict[Tuple[int, int], Dict[Direcao, 'Semaforo']]) -> None:
+        """Aplica ação do modelo RL aos semáforos."""
+        for i, (id_cruzamento, semaforos_cruzamento) in enumerate(sorted(semaforos.items())):
+            if i < len(action):
+                if action[i] == 1:  # Mudar para norte
+                    if Direcao.NORTE in semaforos_cruzamento:
+                        semaforos_cruzamento[Direcao.NORTE].forcar_mudanca(EstadoSemaforo.VERDE)
+                    if Direcao.LESTE in semaforos_cruzamento:
+                        semaforos_cruzamento[Direcao.LESTE].forcar_mudanca(EstadoSemaforo.VERMELHO)
+                elif action[i] == 2:  # Mudar para leste
+                    if Direcao.LESTE in semaforos_cruzamento:
+                        semaforos_cruzamento[Direcao.LESTE].forcar_mudanca(EstadoSemaforo.VERDE)
+                    if Direcao.NORTE in semaforos_cruzamento:
+                        semaforos_cruzamento[Direcao.NORTE].forcar_mudanca(EstadoSemaforo.VERMELHO)
+                # action[i] == 0: manter estado atual
+
+
 class HeuristicaLLM(Heuristica):
     """Heurística usando LLM para controle inteligente."""
     
@@ -510,6 +643,7 @@ def criar_heuristica(tipo: TipoHeuristica) -> Heuristica:
         TipoHeuristica.RANDOM_OPEN_CLOSE: HeuristicaRandomOpenClose,
         TipoHeuristica.LLM_HEURISTICA: HeuristicaLLM,
         TipoHeuristica.ADAPTATIVA_DENSIDADE: HeuristicaAdaptativaDensidade,
+        TipoHeuristica.REINFORCEMENT_LEARNING: HeuristicaReinforcementLearning,
         TipoHeuristica.MANUAL: HeuristicaManual
     }
     

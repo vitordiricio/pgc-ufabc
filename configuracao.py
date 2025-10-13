@@ -24,6 +24,7 @@ class TipoHeuristica(Enum):
     RANDOM_OPEN_CLOSE = auto()    # Randomly changes states while respecting intersections
     LLM_HEURISTICA = auto()       # LLM-based intelligent control
     ADAPTATIVA_DENSIDADE = auto() # Adaptive density-based control with dynamic timing
+    REINFORCEMENT_LEARNING = auto() # RL-based control using PPO
     MANUAL = auto()               # Manual control via mouse clicks and keyboard
 
 

@@ -545,6 +545,13 @@ class MalhaViaria:
     def mudar_heuristica(self, nova_heuristica: TipoHeuristica) -> None:
         self.gerenciador_semaforos.mudar_heuristica(nova_heuristica)
 
+    def obter_densidade_por_cruzamento(self) -> Dict[Tuple[int, int], Dict[Direcao, int]]:
+        """Retorna a densidade de veículos por cruzamento e direção."""
+        densidade_por_cruzamento = {}
+        for id_cruzamento, cruzamento in self.cruzamentos.items():
+            densidade_por_cruzamento[id_cruzamento] = cruzamento.obter_densidade_por_direcao()
+        return densidade_por_cruzamento
+
     def obter_estatisticas(self) -> Dict[str, any]:
         veiculos_ativos = len(self.veiculos)
 

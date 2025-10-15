@@ -29,12 +29,22 @@ def parse_arguments():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Exemplos de uso:
+  # Simulação com interface gráfica
   python main.py --usegui                    # Executa com interface gráfica
+  
+  # Simulação headless com diferentes heurísticas
   python main.py --vertical-horizontal 200   # Executa por 200s com heurística vertical/horizontal
   python main.py --random 300               # Executa por 300s com heurística aleatória
   python main.py --llm 180                  # Executa por 180s com heurística LLM
   python main.py --adaptive 240             # Executa por 240s com heurística adaptativa de densidade
   python main.py --manual 120               # Executa por 120s com controle manual
+  
+  # Reinforcement Learning
+  python main.py --train-rl                 # Treina modelo RL por 100000 timesteps (padrão)
+  python main.py --train-rl 500000          # Treina modelo RL por 500000 timesteps
+  python main.py --train-rl 100000 --rl-save-path rl/models/my_model.zip  # Treina com caminho customizado
+  python main.py --test-rl                  # Testa modelo RL padrão
+  python main.py --test-rl rl/models/my_model.zip --rl-episodes 10  # Testa modelo específico com 10 episódios
         """
     )
     
@@ -53,6 +63,18 @@ Exemplos de uso:
                        help='Executa simulação por X segundos usando heurística adaptativa de densidade')
     parser.add_argument('--manual', type=int, metavar='SECONDS',
                        help='Executa simulação por X segundos usando controle manual')
+    
+    # Reinforcement Learning options
+    parser.add_argument('--train-rl', type=int, metavar='TIMESTEPS', nargs='?', const=100000,
+                       help='Treina modelo de reinforcement learning por X timesteps (padrão: 100000)')
+    parser.add_argument('--rl-save-path', type=str, metavar='PATH',
+                       help='Caminho para salvar o modelo RL treinado (padrão: rl/models/traffic_model.zip)')
+    parser.add_argument('--rl-eval-freq', type=int, metavar='FREQ', default=10000,
+                       help='Frequência de avaliação durante treinamento RL (padrão: 10000)')
+    parser.add_argument('--test-rl', type=str, metavar='MODEL_PATH', nargs='?', const='rl/models/traffic_model.zip',
+                       help='Testa modelo RL treinado (padrão: rl/models/traffic_model.zip)')
+    parser.add_argument('--rl-episodes', type=int, metavar='EPISODES', default=5,
+                       help='Número de episódios para teste RL (padrão: 5)')
     
     # Additional options
     parser.add_argument('--output', '-o', type=str, metavar='FILE',
@@ -164,7 +186,15 @@ def main():
     args = parse_arguments()
     
     # Determina o modo de execução
-    if args.vertical_horizontal is not None:
+    if args.train_rl is not None:
+        print("Opção --train-rl detectada. Use 'python train_rl.py' para treinar o modelo RL.")
+        print("Exemplo: python train_rl.py --timesteps 100000")
+        return
+    elif args.test_rl is not None:
+        print("Opção --test-rl detectada. Use 'python test_rl.py' para testar o modelo RL.")
+        print("Exemplo: python test_rl.py --model-path rl/models/traffic_model.zip")
+        return
+    elif args.vertical_horizontal is not None:
         executar_modo_headless(TipoHeuristica.VERTICAL_HORIZONTAL, 
                               args.vertical_horizontal, args.output, args.verbose)
     elif args.random is not None:

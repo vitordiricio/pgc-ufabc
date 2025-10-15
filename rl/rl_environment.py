@@ -41,12 +41,16 @@ class TrafficRLEnvironment(gym.Env):
         self.initial_vehicles = 0
         self.processed_vehicles = 0
         
-    def reset(self) -> np.ndarray:
+    def reset(self, seed=None, options=None) -> Tuple[np.ndarray, Dict]:
         """Reset environment and return initial observation."""
+        if seed is not None:
+            np.random.seed(seed)
         self._reset_simulation()
-        return self._get_observation()
+        observation = self._get_observation()
+        info = {}
+        return observation, info
         
-    def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, Dict]:
+    def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, Dict]:
         """Execute one step in the environment."""
         # Apply action
         self._apply_action(action)
@@ -62,7 +66,8 @@ class TrafficRLEnvironment(gym.Env):
         reward = self._calculate_reward(action)
         
         # Check if done
-        done = self.step_count >= self.max_steps
+        terminated = self.step_count >= self.max_steps
+        truncated = False  # We don't use truncation in this environment
         
         # Info dict
         info = {
@@ -72,7 +77,7 @@ class TrafficRLEnvironment(gym.Env):
             'throughput': self._calculate_throughput()
         }
         
-        return observation, reward, done, info
+        return observation, reward, terminated, truncated, info
         
     def _get_observation(self) -> np.ndarray:
         """Convert current state to observation vector."""

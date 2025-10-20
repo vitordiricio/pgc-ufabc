@@ -115,14 +115,15 @@ class RLTrafficAgent:
         episode_lengths = []
         
         for episode in range(n_episodes):
-            obs = env.reset()
+            obs, _ = env.reset()
             episode_reward = 0
             episode_length = 0
             done = False
             
             while not done:
                 action = self.predict(obs, deterministic=True)
-                obs, reward, done, info = env.step(action)
+                obs, reward, terminated, truncated, info = env.step(action)
+                done = terminated or truncated
                 episode_reward += reward
                 episode_length += 1
                 

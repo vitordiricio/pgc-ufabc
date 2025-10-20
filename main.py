@@ -4,22 +4,10 @@ Projeto de Graduação em Computação - UFABC
 Autores: Vitor Bobig Diricio e Thiago Schwartz Machado
 """
 import pygame
-import sys
 import os
 import argparse
 from configuracao import CONFIG, TipoHeuristica
 from simulacao import Simulacao, SimulacaoHeadless
-
-
-def verificar_requisitos():
-    """Verifica se todos os requisitos estão instalados."""
-    try:
-        import pygame
-        print(f"✓ Pygame {pygame.version.ver} instalado")
-        return True
-    except ImportError:
-        print("✗ Pygame não encontrado. Instale com: pip install pygame")
-        return False
 
 
 def parse_arguments():
@@ -125,11 +113,6 @@ def configurar_ambiente():
 
 
 def executar_modo_gui():
-    """Executa a simulação com interface gráfica."""
-    # Verifica requisitos
-    if not verificar_requisitos():
-        sys.exit(1)
-    
     # Exibe introdução
     exibir_introducao()
     

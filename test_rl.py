@@ -36,14 +36,15 @@ def test_rl_agent(model_path: str = "rl/models/traffic_model.zip",
             print(f"Episode {episode + 1}/{episodes}")
             
             env = TrafficRLEnvironment({'max_steps': duration})
-            obs = env.reset()
+            obs, _ = env.reset()
             episode_reward = 0
             done = False
             step = 0
             
             while not done:
                 action = agent.predict(obs, deterministic=True)
-                obs, reward, done, info = env.step(action)
+                obs, reward, terminated, truncated, info = env.step(action)
+                done = terminated or truncated
                 episode_reward += reward
                 step += 1
                 

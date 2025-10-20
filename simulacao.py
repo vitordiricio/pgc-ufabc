@@ -10,12 +10,7 @@ from typing import Dict
 from configuracao import CONFIG, TipoHeuristica, Direcao, EstadoSemaforo
 from cruzamento import MalhaViaria
 from renderizador import Renderizador
-
-try:
-    from tqdm import tqdm
-    TQDM_AVAILABLE = True
-except ImportError:
-    TQDM_AVAILABLE = False
+from tqdm import tqdm
 
 
 class GerenciadorMetricas:
@@ -378,15 +373,13 @@ class SimulacaoHeadless:
         if self.verbose:
             print("🔄 Executando simulação...")
 
-        if TQDM_AVAILABLE:
-            progress_bar = tqdm(
-                total=self.duracao_segundos,
-                desc=f"Simulação {self.heuristica.name}",
-                unit="s",
-                bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt}s [{elapsed}<{remaining}, {rate_fmt}]"
-            )
-        else:
-            progress_bar = None
+        progress_bar = tqdm(
+            total=self.duracao_segundos,
+            desc=f"Simulação {self.heuristica.name}",
+            unit="s",
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt}s [{elapsed}<{remaining}, {rate_fmt}]"
+        )
+
 
         try:
             while True:

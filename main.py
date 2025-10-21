@@ -161,13 +161,13 @@ def executar_modo_headless(heuristica: TipoHeuristica, duracao: int,
     """Executa a simulação sem interface gráfica."""
     try:
         print(f"Iniciando simulação headless com grade {rows}x{cols}...")
-        # Note: SimulacaoHeadless doesn't support custom grid sizes yet
-        # For now, it uses the default grid size from CONFIG
         simulacao = SimulacaoHeadless(
             heuristica=heuristica,
             duracao_segundos=duracao,
             nome_arquivo=nome_arquivo,
-            verbose=verbose
+            verbose=verbose,
+            rows=rows,
+            cols=cols
         )
         simulacao.executar()
     except KeyboardInterrupt:

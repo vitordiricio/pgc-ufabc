@@ -124,7 +124,8 @@ class GerenciadorMetricas:
                 }
         return comparacao
 
-    def salvar_relatorio(self, nome_arquivo: str = None, estatisticas_finais: Dict = None) -> str:
+    def salvar_relatorio(self, nome_arquivo: str = None, estatisticas_finais: Dict = None, 
+                        linhas: int = None, colunas: int = None) -> str:
         if nome_arquivo is None:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             nome_arquivo = f"relatorio_simulacao_{timestamp}.json"
@@ -144,7 +145,7 @@ class GerenciadorMetricas:
             'comparacao_heuristicas': self.obter_comparacao(),
             'estatisticas_finais': estat_final,
             'configuracoes': {
-                'grade': f"{CONFIG.LINHAS_GRADE}x{CONFIG.COLUNAS_GRADE}",
+                'grade': f"{linhas or CONFIG.LINHAS_GRADE}x{colunas or CONFIG.COLUNAS_GRADE}",
                 'taxa_geracao': CONFIG.TAXA_GERACAO_VEICULO,
                 'velocidade_max': CONFIG.VELOCIDADE_MAX_VEICULO
             }
@@ -161,6 +162,8 @@ class Simulacao:
     """Classe principal que coordena toda a simulação de tráfego."""
 
     def __init__(self, linhas: int = CONFIG.LINHAS_GRADE, colunas: int = CONFIG.COLUNAS_GRADE):
+        self.linhas = linhas
+        self.colunas = colunas
         self.malha = MalhaViaria(linhas, colunas)
         self.renderizador = Renderizador()
         self.gerenciador_metricas = GerenciadorMetricas()
@@ -271,7 +274,11 @@ class Simulacao:
     def _salvar_relatorio(self) -> None:
         try:
             estatisticas = self.malha.obter_estatisticas()
-            caminho = self.gerenciador_metricas.salvar_relatorio(estatisticas_finais=estatisticas)
+            caminho = self.gerenciador_metricas.salvar_relatorio(
+                estatisticas_finais=estatisticas,
+                linhas=self.linhas,
+                colunas=self.colunas
+            )
             self._mostrar_mensagem(f"Relatório salvo: {os.path.basename(caminho)}")
         except Exception as e:
             self._mostrar_mensagem(f"Erro ao salvar: {str(e)}")
@@ -339,11 +346,16 @@ class SimulacaoHeadless:
     """Simulação sem interface gráfica para análise de desempenho."""
 
     def __init__(self, heuristica: TipoHeuristica, duracao_segundos: int,
-                 nome_arquivo: str = None, verbose: bool = False):
+                 nome_arquivo: str = None, verbose: bool = False,
+                 rows: int = None, cols: int = None):
         self.heuristica = heuristica
         self.duracao_segundos = duracao_segundos
         self.nome_arquivo = nome_arquivo
         self.verbose = verbose
+        
+        # Use provided rows/cols or fall back to CONFIG defaults
+        self.rows = rows if rows is not None else CONFIG.LINHAS_GRADE
+        self.cols = cols if cols is not None else CONFIG.COLUNAS_GRADE
 
         # Inicializa componentes
         self.malha = None
@@ -357,14 +369,14 @@ class SimulacaoHeadless:
 
     def inicializar(self):
         """Inicializa a simulação headless."""
-        self.malha = MalhaViaria(CONFIG.LINHAS_GRADE, CONFIG.COLUNAS_GRADE)
+        self.malha = MalhaViaria(self.rows, self.cols)
         self.malha.mudar_heuristica(self.heuristica)
         self.tempo_inicio = time.time()
 
         if self.verbose:
             print(f"🚀 Iniciando simulação headless com heurística: {self.heuristica.name}")
             print(f"⏱️  Duração: {self.duracao_segundos} segundos")
-            print(f"📊 Grade: {CONFIG.LINHAS_GRADE}x{CONFIG.COLUNAS_GRADE}")
+            print(f"📊 Grade: {self.rows}x{self.cols}")
 
     def executar(self):
         """Executa a simulação headless."""
@@ -448,7 +460,7 @@ class SimulacaoHeadless:
                 'duracao_real': duracao_real,
                 'inicio': datetime.fromtimestamp(self.tempo_inicio).isoformat(),
                 'fim': datetime.fromtimestamp(self.tempo_fim).isoformat(),
-                'grade': f"{CONFIG.LINHAS_GRADE}x{CONFIG.COLUNAS_GRADE}",
+                'grade': f"{self.rows}x{self.cols}",
                 'fps': self.fps
             },
             'metricas': {

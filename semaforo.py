@@ -229,6 +229,7 @@ class GerenciadorSemaforos:
             TipoHeuristica.VERTICAL_HORIZONTAL: "Vertical/Horizontal",
             TipoHeuristica.RANDOM_OPEN_CLOSE: "Aleatório",
             TipoHeuristica.LLM_HEURISTICA: "LLM Inteligente",
+            TipoHeuristica.LLM_CHATGPT: "ChatGPT (OpenAI)",
             TipoHeuristica.ADAPTATIVA_DENSIDADE: "Adaptativa Densidade",
             TipoHeuristica.REINFORCEMENT_LEARNING: "Reinforcement Learning",
             TipoHeuristica.MANUAL: "Manual"

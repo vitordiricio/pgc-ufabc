@@ -93,6 +93,12 @@ Este projeto implementa uma simulação avançada de tráfego urbano com foco na
 - **Vantagem**: Otimiza o fluxo em vias principais
 - **Desvantagem**: Pode penalizar vias secundárias
 
+### 5. ChatGPT (OpenAI)
+
+- **Descrição**: Consulta um modelo de linguagem (ChatGPT) para sugerir a fase ótima do semáforo
+- **Vantagem**: Analisa o estado global usando heurísticas aprendidas
+- **Desvantagem**: Requer chave de API da OpenAI e conexão com a internet
+
 ## 🏗️ Arquitetura do Sistema
 
 ```
@@ -158,6 +164,46 @@ pip install -r requirements.txt
 ```bash
 python main.py
 ```
+
+### Heurística ChatGPT com GUI
+
+Para executar a heurística baseada no ChatGPT com interface gráfica, é necessário definir as credenciais do serviço da OpenAI. Você pode usar variáveis de ambiente ou passar as credenciais diretamente na linha de comando.
+
+> ⚠️ **Atenção no Windows (PowerShell):** o formato `OPENAI_API_KEY=valor comando` não é reconhecido. Utilize `$env:VARIAVEL = 'valor'` ou as flags `--openai-api-key`/`--openai-model` demonstradas abaixo.
+
+#### Usando variáveis de ambiente
+
+- **Linux/macOS (bash/zsh)**
+
+    ```bash
+    OPENAI_API_KEY='<seu_token>' OPENAI_MODEL='gpt-5-mini' python main.py --chatgpt --gui
+    ```
+
+- **Windows PowerShell**
+
+    ```powershell
+    $env:OPENAI_API_KEY = '<seu_token>'
+    $env:OPENAI_MODEL = 'gpt-5-mini'
+    python main.py --chatgpt --gui
+    ```
+
+- **Windows Prompt de Comando (CMD)**
+
+    ```cmd
+    set OPENAI_API_KEY=<seu_token>
+    set OPENAI_MODEL=gpt-5-mini
+    python main.py --chatgpt --gui
+    ```
+
+    > 💡 O terminal embutido do IntelliJ IDEA usa o Prompt de Comando por padrão. Execute os três comandos acima na mesma sessão para garantir que as variáveis `OPENAI_API_KEY` e `OPENAI_MODEL` sejam reconhecidas antes de iniciar o `python main.py`.
+
+#### Passando credenciais pela linha de comando
+
+```bash
+python main.py --chatgpt --gui --openai-api-key "<seu_token>" --openai-model gpt-5-mini
+```
+
+Substitua `<seu_token>` pela sua chave real da OpenAI. Caso o modelo não seja especificado (por variável de ambiente ou flag), `gpt-5-mini` será utilizado por padrão.
 
 ### Controles da Simulação
 

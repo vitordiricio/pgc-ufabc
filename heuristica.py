@@ -3,9 +3,10 @@ Módulo de heurísticas para controle de semáforos.
 Implementa padrão Strategy para diferentes algoritmos de controle.
 """
 from abc import ABC, abstractmethod
-from typing import Dict, Tuple, TYPE_CHECKING
+from typing import Dict, Tuple, TYPE_CHECKING, Type
 import random
 from configuracao import TipoHeuristica, EstadoSemaforo, Direcao, CONFIG
+from llm_manager import BaseLLMManager, LLMManager, OpenAIChatManager
 
 if TYPE_CHECKING:
     from semaforo import Semaforo
@@ -549,87 +550,90 @@ class HeuristicaReinforcementLearning(Heuristica):
                 # action[i] == 0: manter estado atual
 
 
-class HeuristicaLLM(Heuristica):
-    """Heurística usando LLM para controle inteligente."""
-    
+class HeuristicaLLMBase(Heuristica):
+    """Base comum para heurísticas que utilizam modelos de linguagem."""
+
+    manager_cls: Type[BaseLLMManager]
+
     def __init__(self):
-        """Inicializa a heurística LLM."""
         super().__init__()
-        from llm_manager import LLMManager
-        self.llm_manager = LLMManager()
-    
+        if not getattr(self, 'manager_cls', None):
+            raise ValueError("manager_cls deve ser definido nas subclasses de HeuristicaLLMBase")
+        self.llm_manager = self.manager_cls()  # type: ignore[call-arg]
+
     def _inicializar_config(self) -> Dict:
-        """Inicializa configurações para LLM."""
         return {
-            'intervalo_avaliacao': 120,  # Avalia densidade a cada 2 segundos
+            'intervalo_avaliacao': 120,
             'tempo_desde_avaliacao': 0
         }
-    
-    def atualizar(self, semaforos: Dict[Tuple[int, int], Dict[Direcao, 'Semaforo']], 
+
+    def atualizar(self, semaforos: Dict[Tuple[int, int], Dict[Direcao, 'Semaforo']],
                   densidade_por_cruzamento: Dict[Tuple[int, int], Dict[Direcao, int]]) -> None:
-        """Atualização usando LLM para controle inteligente - MÃO ÚNICA."""
-        if not self.llm_manager or not self.llm_manager.llm_available:
-            # Fallback to vertical/horizontal if LLM not available
+        if not getattr(self, 'llm_manager', None) or not self.llm_manager.llm_available:
             heuristica_fallback = HeuristicaVerticalHorizontal()
             heuristica_fallback.tempo_ciclo = self.tempo_ciclo
             heuristica_fallback.config = self.config.copy()
             heuristica_fallback.atualizar(semaforos, densidade_por_cruzamento)
             return
-        
-        # Check if it's time to evaluate
+
         if not self.llm_manager.should_evaluate(self.tempo_ciclo):
-            # Just update semaphores normally without LLM decision
             for id_cruzamento, semaforos_cruzamento in semaforos.items():
                 for semaforo in semaforos_cruzamento.values():
                     semaforo.atualizar()
                 self._verificar_alternancia_mao_unica(semaforos_cruzamento)
             return
-        
+
         try:
-            # Prepare traffic state data
             global_metrics = {
                 'total_vehicles': sum(sum(densidade.values()) for densidade in densidade_por_cruzamento.values()),
-                'average_wait_time': 0,  # TODO: Calculate from vehicle data
-                'traffic_density': 'medium'  # TODO: Calculate based on density
+                'average_wait_time': 0,
+                'traffic_density': 'medium'
             }
-            
+
             traffic_state = self.llm_manager.prepare_traffic_state(
-                densidade_por_cruzamento, 
-                semaforos, 
+                densidade_por_cruzamento,
+                semaforos,
                 global_metrics
             )
-            
-            # Get LLM decisions with timeout handling
+
             decisions = self.llm_manager.get_traffic_decisions(traffic_state, self.tempo_ciclo)
-            
+
             if decisions:
-                # Apply LLM decisions
                 messages = self.llm_manager.apply_decisions(decisions, semaforos)
                 if messages:
                     print(f"🤖 LLM Decisions: {', '.join(messages)}")
             else:
-                # Fallback to vertical/horizontal if LLM fails
                 print("⚠️ LLM failed, using fallback heuristic")
                 heuristica_fallback = HeuristicaVerticalHorizontal()
                 heuristica_fallback.tempo_ciclo = self.tempo_ciclo
                 heuristica_fallback.config = self.config.copy()
                 heuristica_fallback.atualizar(semaforos, densidade_por_cruzamento)
                 return
-                
+
         except Exception as e:
             print(f"❌ LLM heuristic error: {e}")
-            # Fallback to vertical/horizontal
             heuristica_fallback = HeuristicaVerticalHorizontal()
             heuristica_fallback.tempo_ciclo = self.tempo_ciclo
             heuristica_fallback.config = self.config.copy()
             heuristica_fallback.atualizar(semaforos, densidade_por_cruzamento)
             return
-        
-        # Update all semaphores normally
+
         for id_cruzamento, semaforos_cruzamento in semaforos.items():
             for semaforo in semaforos_cruzamento.values():
                 semaforo.atualizar()
             self._verificar_alternancia_mao_unica(semaforos_cruzamento)
+
+
+class HeuristicaLLM(HeuristicaLLMBase):
+    """Heurística usando Ollama para controle inteligente."""
+
+    manager_cls = LLMManager
+
+
+class HeuristicaChatGPT(HeuristicaLLMBase):
+    """Heurística que utiliza o modelo ChatGPT via API da OpenAI."""
+
+    manager_cls = OpenAIChatManager
 
 
 def criar_heuristica(tipo: TipoHeuristica) -> Heuristica:
@@ -646,6 +650,7 @@ def criar_heuristica(tipo: TipoHeuristica) -> Heuristica:
         TipoHeuristica.VERTICAL_HORIZONTAL: HeuristicaVerticalHorizontal,
         TipoHeuristica.RANDOM_OPEN_CLOSE: HeuristicaRandomOpenClose,
         TipoHeuristica.LLM_HEURISTICA: HeuristicaLLM,
+        TipoHeuristica.LLM_CHATGPT: HeuristicaChatGPT,
         TipoHeuristica.ADAPTATIVA_DENSIDADE: HeuristicaAdaptativaDensidade,
         TipoHeuristica.REINFORCEMENT_LEARNING: HeuristicaReinforcementLearning,
         TipoHeuristica.MANUAL: HeuristicaManual
@@ -654,5 +659,5 @@ def criar_heuristica(tipo: TipoHeuristica) -> Heuristica:
     heuristica_class = heuristica_map.get(tipo)
     if not heuristica_class:
         raise ValueError(f"Tipo de heurística não suportado: {tipo}")
-    
+
     return heuristica_class()

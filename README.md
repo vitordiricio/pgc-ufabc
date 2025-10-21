@@ -167,7 +167,11 @@ python main.py
 
 ### Heurística ChatGPT com GUI
 
-Para executar a heurística baseada no ChatGPT com interface gráfica, é necessário definir as variáveis de ambiente `OPENAI_API_KEY` e `OPENAI_MODEL`. A seguir estão exemplos para diferentes sistemas:
+Para executar a heurística baseada no ChatGPT com interface gráfica, é necessário definir as credenciais do serviço da OpenAI. Você pode usar variáveis de ambiente ou passar as credenciais diretamente na linha de comando.
+
+> ⚠️ **Atenção no Windows (PowerShell):** o formato `OPENAI_API_KEY=valor comando` não é reconhecido. Utilize `$env:VARIAVEL = 'valor'` ou as flags `--openai-api-key`/`--openai-model` demonstradas abaixo.
+
+#### Usando variáveis de ambiente
 
 - **Linux/macOS (bash/zsh)**
 
@@ -191,7 +195,35 @@ Para executar a heurística baseada no ChatGPT com interface gráfica, é necess
     python main.py --chatgpt --gui
     ```
 
-Substitua `<seu_token>` pela sua chave real da OpenAI. Caso o modelo não seja especificado, `gpt-5-mini` será utilizado por padrão.
+    > 💡 O terminal embutido do IntelliJ IDEA usa o Prompt de Comando por padrão. Execute os três comandos acima na mesma sessão para garantir que as variáveis `OPENAI_API_KEY` e `OPENAI_MODEL` sejam reconhecidas antes de iniciar o `python main.py`.
+
+    ```cmd
+    REM Versão em linha única usando o Prompt de Comando
+    set OPENAI_API_KEY=<seu_token> && set OPENAI_MODEL=gpt-5-mini && python main.py --chatgpt --gui
+    ```
+
+    > ✅ Útil no terminal do IntelliJ/CLion: copie e cole a linha acima substituindo `<seu_token>` e pressione **Enter** para definir as variáveis e iniciar a simulação de uma só vez.
+
+    > ⚠️ Se o prompt mostrar `PS`, o terminal ainda está no PowerShell. Execute `cmd` antes de rodar o comando acima ou use:
+
+    ```powershell
+    cmd /d /c "set OPENAI_API_KEY=<seu_token> & set OPENAI_MODEL=gpt-5-mini & python main.py --chatgpt --gui"
+    ```
+
+    > Isso abre um Prompt de Comando temporário, define as variáveis e inicia o programa — evitando o erro `O token '&&' não é um separador de instruções válido` exibido pelo PowerShell.
+
+#### Passando credenciais pela linha de comando
+
+```bash
+python main.py --chatgpt --gui --openai-api-key "<seu_token>" --openai-model gpt-5-mini
+```
+
+Caso a conexão com a API da OpenAI falhe (por exemplo, sem acesso à internet ou devido a bloqueios de proxy), a aplicação
+exibirá uma mensagem como `Unable to reach OpenAI's API (network connection error)` e retomará automaticamente a heurística
+padrão do projeto. Nenhuma outra ação é necessária além de restabelecer a conexão e reiniciar a simulação se desejar reativar o
+ChatGPT.
+
+Substitua `<seu_token>` pela sua chave real da OpenAI. Caso o modelo não seja especificado (por variável de ambiente ou flag), `gpt-5-mini` será utilizado por padrão.
 
 ### Controles da Simulação
 

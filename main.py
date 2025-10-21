@@ -82,6 +82,10 @@ Exemplos de uso:
                        help='Nome do arquivo de saída para o relatório (padrão: auto-gerado)')
     parser.add_argument('--verbose', '-v', action='store_true',
                        help='Mostra informações detalhadas durante a execução')
+    parser.add_argument('--openai-api-key', type=str, metavar='KEY',
+                       help='Define a chave de API da OpenAI para a heurística ChatGPT (sobrescreve a variável de ambiente)')
+    parser.add_argument('--openai-model', type=str, metavar='MODEL',
+                       help='Define o modelo da OpenAI usado pela heurística ChatGPT (sobrescreve a variável de ambiente)')
     
     return parser.parse_args()
 
@@ -238,6 +242,12 @@ def main():
     """Função principal do programa."""
     import sys
     args = parse_arguments()
+
+    # Configurações diretas da API OpenAI (caso informadas por linha de comando)
+    if getattr(args, 'openai_api_key', None):
+        os.environ['OPENAI_API_KEY'] = args.openai_api_key
+    if getattr(args, 'openai_model', None):
+        os.environ['OPENAI_MODEL'] = args.openai_model
     
     # Validate arguments
     if not validate_arguments(args):

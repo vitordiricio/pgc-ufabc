@@ -204,6 +204,14 @@ Para executar a heurística baseada no ChatGPT com interface gráfica, é necess
 
     > ✅ Útil no terminal do IntelliJ/CLion: copie e cole a linha acima substituindo `<seu_token>` e pressione **Enter** para definir as variáveis e iniciar a simulação de uma só vez.
 
+    > ⚠️ Se o prompt mostrar `PS`, o terminal ainda está no PowerShell. Execute `cmd` antes de rodar o comando acima ou use:
+
+    ```powershell
+    cmd /d /c "set OPENAI_API_KEY=<seu_token> & set OPENAI_MODEL=gpt-5-mini & python main.py --chatgpt --gui"
+    ```
+
+    > Isso abre um Prompt de Comando temporário, define as variáveis e inicia o programa — evitando o erro `O token '&&' não é um separador de instruções válido` exibido pelo PowerShell.
+
 #### Passando credenciais pela linha de comando
 
 ```bash

@@ -23,6 +23,7 @@ class TipoHeuristica(Enum):
     VERTICAL_HORIZONTAL = auto()  # Alternates between vertical and horizontal every 5 seconds
     RANDOM_OPEN_CLOSE = auto()    # Randomly changes states while respecting intersections
     LLM_HEURISTICA = auto()       # LLM-based intelligent control
+    LLM_CHATGPT = auto()          # LLM-based control using OpenAI's ChatGPT
     ADAPTATIVA_DENSIDADE = auto() # Adaptive density-based control with dynamic timing
     REINFORCEMENT_LEARNING = auto() # RL-based control using PPO
     MANUAL = auto()               # Manual control via mouse clicks and keyboard

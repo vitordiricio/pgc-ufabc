@@ -49,7 +49,9 @@ Exemplos de uso:
     parser.add_argument('--random', type=int, metavar='SECONDS', nargs='?',
                        help='Executa simulação por X segundos usando heurística aleatória (ou indefinidamente com --gui)')
     parser.add_argument('--llm', type=int, metavar='SECONDS', nargs='?',
-                       help='Executa simulação por X segundos usando heurística LLM (ou indefinidamente com --gui)')
+                       help='Executa simulação por X segundos usando heurística LLM (modelo Ollama) ou indefinidamente com --gui')
+    parser.add_argument('--chatgpt', type=int, metavar='SECONDS', nargs='?',
+                       help='Executa simulação por X segundos usando heurística ChatGPT (OpenAI) ou indefinidamente com --gui')
     parser.add_argument('--adaptive', type=int, metavar='SECONDS', nargs='?',
                        help='Executa simulação por X segundos usando heurística adaptativa de densidade (ou indefinidamente com --gui)')
     parser.add_argument('--rl', type=int, metavar='SECONDS', nargs='?',
@@ -191,6 +193,7 @@ def validate_arguments(args):
         '--vertical-horizontal' in sys.argv,
         '--random' in sys.argv,
         '--llm' in sys.argv,
+        '--chatgpt' in sys.argv,
         '--adaptive' in sys.argv,
         '--rl' in sys.argv,
         '--manual' in sys.argv
@@ -212,7 +215,8 @@ def validate_arguments(args):
     if args.gui and heuristic_count > 0:
         # Check if any heuristic has duration specified (not None means duration was provided)
         heuristic_args = [
-            args.vertical_horizontal, args.random, args.llm, 
+            args.vertical_horizontal, args.random, args.llm,
+            args.chatgpt,
             args.adaptive, args.rl, args.manual
         ]
         for heuristic_arg in heuristic_args:
@@ -256,6 +260,8 @@ def main():
             executar_modo_gui(TipoHeuristica.RANDOM_OPEN_CLOSE, args.rows, args.cols)
         elif '--llm' in sys.argv:
             executar_modo_gui(TipoHeuristica.LLM_HEURISTICA, args.rows, args.cols)
+        elif '--chatgpt' in sys.argv:
+            executar_modo_gui(TipoHeuristica.LLM_CHATGPT, args.rows, args.cols)
         elif '--adaptive' in sys.argv:
             executar_modo_gui(TipoHeuristica.ADAPTATIVA_DENSIDADE, args.rows, args.cols)
         elif '--rl' in sys.argv:
@@ -276,8 +282,12 @@ def main():
                                   args.random, args.output, args.verbose,
                                   args.rows, args.cols)
         elif args.llm is not None:
-            executar_modo_headless(TipoHeuristica.LLM_HEURISTICA, 
+            executar_modo_headless(TipoHeuristica.LLM_HEURISTICA,
                                   args.llm, args.output, args.verbose,
+                                  args.rows, args.cols)
+        elif args.chatgpt is not None:
+            executar_modo_headless(TipoHeuristica.LLM_CHATGPT,
+                                  args.chatgpt, args.output, args.verbose,
                                   args.rows, args.cols)
         elif args.adaptive is not None:
             executar_modo_headless(TipoHeuristica.ADAPTATIVA_DENSIDADE, 

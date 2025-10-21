@@ -236,8 +236,6 @@ class Renderizador:
             ("ESPAÇO", "Pausar/Continuar"),
             ("R", "Reiniciar simulação"),
             ("+/-", "Ajustar velocidade"),
-            ("1-3", "Mudar heurística"),
-            ("5", "Modo Manual"),
             ("N", "Avançar fase manual (todos)"),
             ("Clique", "Alternar semáforo sob o mouse (Manual)"),
             ("TAB", "Alternar estatísticas")

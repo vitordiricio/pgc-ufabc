@@ -161,26 +161,42 @@ class GerenciadorMetricas:
 class Simulacao:
     """Classe principal que coordena toda a simulação de tráfego."""
 
-    def __init__(self, linhas: int = CONFIG.LINHAS_GRADE, colunas: int = CONFIG.COLUNAS_GRADE):
+    def __init__(self, heuristica: TipoHeuristica = None, use_gui: bool = True, 
+                 duracao_segundos: int = None, nome_arquivo: str = None, 
+                 verbose: bool = False, linhas: int = CONFIG.LINHAS_GRADE, 
+                 colunas: int = CONFIG.COLUNAS_GRADE):
         self.linhas = linhas
         self.colunas = colunas
+        self.use_gui = use_gui
+        self.heuristica_atual = heuristica or CONFIG.HEURISTICA_ATIVA
+        self.duracao_segundos = duracao_segundos
+        self.nome_arquivo = nome_arquivo
+        self.verbose = verbose
+        
         self.malha = MalhaViaria(linhas, colunas)
-        self.renderizador = Renderizador()
         self.gerenciador_metricas = GerenciadorMetricas()
-
-        self.rodando = True
-        self.pausado = False
-        self.mostrar_estatisticas = True
-
-        self.multiplicador_velocidade = 1.0
-        self.tempo_acumulado = 0.0
-
-        self.heuristica_atual = CONFIG.HEURISTICA_ATIVA
-        self.tempo_por_heuristica = {}
-        self.inicio_heuristica = pygame.time.get_ticks()
-
-        self.mensagem_temporaria = None
-        self.tempo_mensagem = 0
+        
+        # Initialize renderer only for GUI mode
+        if self.use_gui:
+            self.renderizador = Renderizador()
+            self.rodando = True
+            self.pausado = False
+            self.mostrar_estatisticas = True
+            self.multiplicador_velocidade = 1.0
+            self.tempo_acumulado = 0.0
+            self.tempo_por_heuristica = {}
+            self.inicio_heuristica = pygame.time.get_ticks()
+            self.mensagem_temporaria = None
+            self.tempo_mensagem = 0
+        else:
+            # Headless mode variables
+            self.tempo_inicio = None
+            self.tempo_fim = None
+            self.fps = 60
+            self.tempo_acumulado = 0.0
+        
+        # Set the heuristic for the simulation
+        self.malha.mudar_heuristica(self.heuristica_atual)
 
     def processar_eventos(self) -> None:
         for evento in pygame.event.get():
@@ -219,49 +235,15 @@ class Simulacao:
         elif evento.key in [pygame.K_MINUS, pygame.K_KP_MINUS]:
             self.multiplicador_velocidade = max(0.5, self.multiplicador_velocidade - 0.5)
             self._mostrar_mensagem(f"Velocidade: {self.multiplicador_velocidade}x")
-        elif evento.key == pygame.K_1:
-            self._mudar_heuristica(TipoHeuristica.VERTICAL_HORIZONTAL)
-        elif evento.key == pygame.K_2:
-            self._mudar_heuristica(TipoHeuristica.RANDOM_OPEN_CLOSE)
-        elif evento.key == pygame.K_3:
-            self._mudar_heuristica(TipoHeuristica.LLM_HEURISTICA)
-        elif evento.key == pygame.K_4:
-            self._mudar_heuristica(TipoHeuristica.ADAPTATIVA_DENSIDADE)
-        elif evento.key == pygame.K_5:
-            self._mudar_heuristica(TipoHeuristica.REINFORCEMENT_LEARNING)
-        elif evento.key == pygame.K_6:
-            self._mudar_heuristica(TipoHeuristica.MANUAL)
         elif evento.key == pygame.K_n and self.heuristica_atual == TipoHeuristica.MANUAL:
             self.malha.gerenciador_semaforos.avancar_manual()
             self._mostrar_mensagem("Manual: semáforos avançados")
-        elif evento.key == pygame.K_s and (evento.mod & pygame.KMOD_CTRL):
-            self._salvar_relatorio()
 
-    def _mudar_heuristica(self, nova_heuristica: TipoHeuristica) -> None:
-        if nova_heuristica != self.heuristica_atual:
-            tempo_atual = pygame.time.get_ticks()
-            tempo_decorrido = (tempo_atual - self.inicio_heuristica) / 1000
-            if self.heuristica_atual not in self.tempo_por_heuristica:
-                self.tempo_por_heuristica[self.heuristica_atual] = 0
-            self.tempo_por_heuristica[self.heuristica_atual] += tempo_decorrido
-            self.heuristica_atual = nova_heuristica
-            self.malha.mudar_heuristica(nova_heuristica)
-            self.inicio_heuristica = tempo_atual
-
-            nomes = {
-                TipoHeuristica.VERTICAL_HORIZONTAL: "Vertical/Horizontal",
-                TipoHeuristica.RANDOM_OPEN_CLOSE: "Aleatório",
-                TipoHeuristica.LLM_HEURISTICA: "LLM Inteligente",
-                TipoHeuristica.ADAPTATIVA_DENSIDADE: "Adaptativa Densidade",
-                TipoHeuristica.REINFORCEMENT_LEARNING: "Reinforcement Learning",
-                TipoHeuristica.MANUAL: "Manual"
-            }
-            nome_heuristica = nomes.get(nova_heuristica, "Desconhecida")
-            self._mostrar_mensagem(f"Heurística: {nome_heuristica}")
 
     def _reiniciar(self) -> None:
         self._coletar_metricas()
-        self.malha = MalhaViaria(CONFIG.LINHAS_GRADE, CONFIG.COLUNAS_GRADE)
+        self.malha = MalhaViaria(self.linhas, self.colunas)
+        self.malha.mudar_heuristica(self.heuristica_atual)
         self.pausado = False
         self.multiplicador_velocidade = 1.0
         self.tempo_acumulado = 0.0
@@ -271,34 +253,43 @@ class Simulacao:
         self.mensagem_temporaria = mensagem
         self.tempo_mensagem = pygame.time.get_ticks()
 
-    def _salvar_relatorio(self) -> None:
-        try:
-            estatisticas = self.malha.obter_estatisticas()
-            caminho = self.gerenciador_metricas.salvar_relatorio(
-                estatisticas_finais=estatisticas,
-                linhas=self.linhas,
-                colunas=self.colunas
-            )
-            self._mostrar_mensagem(f"Relatório salvo: {os.path.basename(caminho)}")
-        except Exception as e:
-            self._mostrar_mensagem(f"Erro ao salvar: {str(e)}")
 
     def _finalizar_simulacao(self) -> None:
         self._coletar_metricas()
         print("\nSimulação finalizada!")
-        print("Comparação de heurísticas:")
-        comparacao = self.gerenciador_metricas.obter_comparacao()
-        for heuristica, dados in comparacao.items():
-            print(f"\n{heuristica}:")
-            print(f"  - Tempo médio de viagem: {dados['tempo_viagem_medio']:.2f}s")
-            print(f"  - Tempo médio parado: {dados['tempo_parado_medio']:.2f}s")
-            print(f"  - Eficiência média: {dados['eficiencia_media']:.1f}%")
-            print(f"  - Throughput médio/min: {dados['throughput_medio_por_minuto']:.2f}")
-            print(f"  - Paradas médias/veículo: {dados['paradas_medias_por_veiculo']:.2f}")
-            print(f"  - P95 de viagem (médio): {dados['tempo_viagem_p95_medio']:.2f}s")
-            print(f"  - Backlog médio: {dados['backlog_medio']:.2f}")
-            print(f"  - Backlog max médio: {dados['backlog_max_medio']:.2f}")
+        
+        # Auto-save report for GUI mode
+        self._gerar_relatorio_gui()
+        
         self.rodando = False
+    
+    def _gerar_relatorio_gui(self) -> None:
+        """Generate and save report for GUI mode using headless pattern."""
+        try:
+            estatisticas = self.malha.obter_estatisticas()
+            
+            # Calculate duration (approximate from simulation time)
+            duracao_real = self.malha.metricas['tempo_simulacao'] / CONFIG.FPS
+            
+            # Generate filename using headless pattern
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            nome_arquivo = f"relatorio_{self.heuristica_atual.name.lower()}_{timestamp}.json"
+            
+            # Use unified report generation
+            self._gerar_relatorio_unificado(
+                estatisticas=estatisticas,
+                duracao_real=duracao_real,
+                duracao_solicitada=None,
+                tempo_inicio=datetime.now(),
+                tempo_fim=datetime.now(),
+                nome_arquivo=nome_arquivo,
+                modo='gui'
+            )
+            
+            print(f"Relatório salvo automaticamente: {nome_arquivo}")
+            
+        except Exception as e:
+            print(f"Erro ao salvar relatório: {str(e)}")
 
     def _coletar_metricas(self) -> None:
         estatisticas = self.malha.obter_estatisticas()
@@ -330,6 +321,13 @@ class Simulacao:
                 self.mensagem_temporaria = None
 
     def executar(self) -> None:
+        if self.use_gui:
+            self._executar_gui()
+        else:
+            self._executar_headless()
+    
+    def _executar_gui(self) -> None:
+        """Execute simulation in GUI mode."""
         clock = pygame.time.Clock()
         print("Simulação de Tráfego Urbano iniciada!")
         print("Pressione F1 para ajuda com os controles.")
@@ -340,58 +338,20 @@ class Simulacao:
             self.renderizar()
         print("\nSimulação encerrada.")
         pygame.quit()
-
-
-class SimulacaoHeadless:
-    """Simulação sem interface gráfica para análise de desempenho."""
-
-    def __init__(self, heuristica: TipoHeuristica, duracao_segundos: int,
-                 nome_arquivo: str = None, verbose: bool = False,
-                 rows: int = None, cols: int = None):
-        self.heuristica = heuristica
-        self.duracao_segundos = duracao_segundos
-        self.nome_arquivo = nome_arquivo
-        self.verbose = verbose
+    
+    def _executar_headless(self) -> None:
+        """Execute simulation in headless mode."""
+        self._inicializar_headless()
         
-        # Use provided rows/cols or fall back to CONFIG defaults
-        self.rows = rows if rows is not None else CONFIG.LINHAS_GRADE
-        self.cols = cols if cols is not None else CONFIG.COLUNAS_GRADE
-
-        # Inicializa componentes
-        self.malha = None
-        self.gerenciador_metricas = GerenciadorMetricas()
-        self.tempo_inicio = None
-        self.tempo_fim = None
-
-        # Configurações para simulação headless
-        self.fps = 60  # FPS fixo para simulação
-        self.tempo_acumulado = 0.0
-
-    def inicializar(self):
-        """Inicializa a simulação headless."""
-        self.malha = MalhaViaria(self.rows, self.cols)
-        self.malha.mudar_heuristica(self.heuristica)
-        self.tempo_inicio = time.time()
-
         if self.verbose:
-            print(f"🚀 Iniciando simulação headless com heurística: {self.heuristica.name}")
-            print(f"⏱️  Duração: {self.duracao_segundos} segundos")
-            print(f"📊 Grade: {self.rows}x{self.cols}")
-
-    def executar(self):
-        """Executa a simulação headless."""
-        self.inicializar()
-
-        if self.verbose:
-            print("🔄 Executando simulação...")
+            print("Executando simulação...")
 
         progress_bar = tqdm(
             total=self.duracao_segundos,
-            desc=f"Simulação {self.heuristica.name}",
+            desc=f"Simulação {self.heuristica_atual.name}",
             unit="s",
             bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt}s [{elapsed}<{remaining}, {rate_fmt}]"
         )
-
 
         try:
             while True:
@@ -421,69 +381,97 @@ class SimulacaoHeadless:
                 progress_bar.close()
 
         self.tempo_fim = time.time()
-        self._finalizar()
+        self._finalizar_headless()
+    
+    def _inicializar_headless(self) -> None:
+        """Initialize headless simulation."""
+        self.tempo_inicio = time.time()
 
-    def _coletar_metricas(self):
-        """Coleta métricas da simulação."""
-        estatisticas = self.malha.obter_estatisticas()
-        self.gerenciador_metricas.registrar_metricas(estatisticas, self.heuristica)
-
-        if self.verbose and estatisticas['veiculos_concluidos'] > 0:
-            print(
-                f"📈 Veículos concl.: {estatisticas['veiculos_concluidos']}, "
-                f"Tempo méd.: {estatisticas['tempo_viagem_medio']:.2f}s, "
-                f"Throughput/min: {estatisticas.get('throughput_por_minuto', 0.0):.2f}, "
-                f"Backlog atual: {estatisticas.get('backlog_total', 0)}"
-            )
-
-    def _finalizar(self):
-        """Finaliza a simulação e gera relatório."""
+        if self.verbose:
+            print(f"Iniciando simulação headless com heurística: {self.heuristica_atual.name}")
+            print(f"Duração: {self.duracao_segundos} segundos")
+            print(f"Grade: {self.linhas}x{self.colunas}")
+    
+    def _finalizar_headless(self) -> None:
+        """Finalize headless simulation and generate report."""
         duracao_real = self.tempo_fim - self.tempo_inicio
 
         if self.verbose:
-            print(f"\n✅ Simulação concluída em {duracao_real:.2f} segundos")
+            print(f"\nSimulação concluída em {duracao_real:.2f} segundos")
 
         estatisticas_finais = self.malha.obter_estatisticas()
-        self.gerenciador_metricas.registrar_metricas(estatisticas_finais, self.heuristica)
-        self._gerar_relatorio(duracao_real, estatisticas_finais)
-
-    def _gerar_relatorio(self, duracao_real: float, estatisticas_finais: dict):
-        """Gera relatório detalhado da simulação."""
+        self.gerenciador_metricas.registrar_metricas(estatisticas_finais, self.heuristica_atual)
+        self._gerar_relatorio_headless(duracao_real, estatisticas_finais)
+    
+    def _gerar_relatorio_headless(self, duracao_real: float, estatisticas_finais: dict):
+        """Generate headless report using the same pattern as before."""
         if not self.nome_arquivo:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            self.nome_arquivo = f"relatorio_{self.heuristica.name.lower()}_{timestamp}.json"
+            self.nome_arquivo = f"relatorio_{self.heuristica_atual.name.lower()}_{timestamp}.json"
 
+        # Use unified report generation
+        caminho_completo = self._gerar_relatorio_unificado(
+            estatisticas=estatisticas_finais,
+            duracao_real=duracao_real,
+            duracao_solicitada=self.duracao_segundos,
+            tempo_inicio=datetime.fromtimestamp(self.tempo_inicio),
+            tempo_fim=datetime.fromtimestamp(self.tempo_fim),
+            nome_arquivo=self.nome_arquivo,
+            modo='headless'
+        )
+
+        print(f"\nRELATÓRIO DE DESEMPENHO - {self.heuristica_atual.name}")
+        print("=" * 50)
+        print(f"Duração: {duracao_real:.2f}s (solicitado: {self.duracao_segundos}s)")
+        print(f"Veículos processados: {estatisticas_finais['veiculos_concluidos']}")
+        print(f"Tempo médio de viagem: {estatisticas_finais['tempo_viagem_medio']:.2f}s")
+        print(f"Tempo médio parado: {estatisticas_finais['tempo_parado_medio']:.2f}s")
+        print(f"Throughput/min: {estatisticas_finais.get('throughput_por_minuto', 0.0):.2f}")
+        print(f"Backlog atual: {estatisticas_finais.get('backlog_total', 0)} | "
+              f"máx: {estatisticas_finais.get('backlog_max', 0)} | "
+              f"médio: {estatisticas_finais.get('backlog_medio', 0.0):.2f}")
+        print(f"Backlog gerado: {estatisticas_finais.get('backlog_gerado_total', 0)} | "
+              f"despachado: {estatisticas_finais.get('backlog_despachado_total', 0)}")
+        print(f"Score: {self.gerenciador_metricas.calcular_score(self.heuristica_atual):.1f}")
+        print(f"Relatório salvo: {caminho_completo}")
+        print("=" * 50)
+
+    def _gerar_relatorio_unificado(self, estatisticas: dict, duracao_real: float, 
+                                  duracao_solicitada: int, tempo_inicio: datetime, 
+                                  tempo_fim: datetime, nome_arquivo: str, modo: str) -> str:
+        """Unified report generation for both GUI and headless modes."""
         relatorio = {
             'simulacao': {
-                'heuristica': self.heuristica.name,
-                'duracao_solicitada': self.duracao_segundos,
+                'heuristica': self.heuristica_atual.name,
+                'duracao_solicitada': duracao_solicitada,
                 'duracao_real': duracao_real,
-                'inicio': datetime.fromtimestamp(self.tempo_inicio).isoformat(),
-                'fim': datetime.fromtimestamp(self.tempo_fim).isoformat(),
-                'grade': f"{self.rows}x{self.cols}",
-                'fps': self.fps
+                'inicio': tempo_inicio.isoformat(),
+                'fim': tempo_fim.isoformat(),
+                'grade': f"{self.linhas}x{self.colunas}",
+                'fps': CONFIG.FPS if modo == 'gui' else self.fps,
+                'modo': modo
             },
             'metricas': {
-                'veiculos_concluidos': estatisticas_finais['veiculos_concluidos'],
-                'tempo_viagem_medio': estatisticas_finais['tempo_viagem_medio'],
-                'tempo_parado_medio': estatisticas_finais['tempo_parado_medio'],
-                'eficiencia_media': self._calcular_eficiencia(estatisticas_finais),
-                'score_heuristica': self.gerenciador_metricas.calcular_score(self.heuristica),
+                'veiculos_concluidos': estatisticas['veiculos_concluidos'],
+                'tempo_viagem_medio': estatisticas['tempo_viagem_medio'],
+                'tempo_parado_medio': estatisticas['tempo_parado_medio'],
+                'eficiencia_media': self._calcular_eficiencia(estatisticas),
+                'score_heuristica': self.gerenciador_metricas.calcular_score(self.heuristica_atual),
                 # extras (se presentes)
-                'velocidade_media_global_px_s': estatisticas_finais.get('velocidade_media_global', 0.0),
-                'paradas_media_por_veiculo': estatisticas_finais.get('paradas_media_por_veiculo', 0.0),
-                'tempo_viagem_p50': estatisticas_finais.get('tempo_viagem_p50', 0.0),
-                'tempo_viagem_p95': estatisticas_finais.get('tempo_viagem_p95', 0.0),
-                'throughput_por_minuto': estatisticas_finais.get('throughput_por_minuto', 0.0),
-                'veiculos_aguardando_instante': estatisticas_finais.get('veiculos_aguardando', 0),
-                'velocidade_media_ativa': estatisticas_finais.get('velocidade_media_ativa', 0.0),
-                'maior_fila_cruzamento_atual': estatisticas_finais.get('maior_fila_cruzamento_atual', 0),
+                'velocidade_media_global_px_s': estatisticas.get('velocidade_media_global', 0.0),
+                'paradas_media_por_veiculo': estatisticas.get('paradas_media_por_veiculo', 0.0),
+                'tempo_viagem_p50': estatisticas.get('tempo_viagem_p50', 0.0),
+                'tempo_viagem_p95': estatisticas.get('tempo_viagem_p95', 0.0),
+                'throughput_por_minuto': estatisticas.get('throughput_por_minuto', 0.0),
+                'veiculos_aguardando_instante': estatisticas.get('veiculos_aguardando', 0),
+                'velocidade_media_ativa': estatisticas.get('velocidade_media_ativa', 0.0),
+                'maior_fila_cruzamento_atual': estatisticas.get('maior_fila_cruzamento_atual', 0),
                 # backlog
-                'backlog_total_atual': estatisticas_finais.get('backlog_total', 0),
-                'backlog_max_total': estatisticas_finais.get('backlog_max', 0),
-                'backlog_gerado_total': estatisticas_finais.get('backlog_gerado_total', 0),
-                'backlog_despachado_total': estatisticas_finais.get('backlog_despachado_total', 0),
-                'backlog_medio': estatisticas_finais.get('backlog_medio', 0.0),
+                'backlog_total_atual': estatisticas.get('backlog_total', 0),
+                'backlog_max_total': estatisticas.get('backlog_max', 0),
+                'backlog_gerado_total': estatisticas.get('backlog_gerado_total', 0),
+                'backlog_despachado_total': estatisticas.get('backlog_despachado_total', 0),
+                'backlog_medio': estatisticas.get('backlog_medio', 0.0),
             },
             'configuracao': {
                 'taxa_geracao': CONFIG.TAXA_GERACAO_VEICULO,
@@ -499,28 +487,16 @@ class SimulacaoHeadless:
         }
 
         os.makedirs('relatorios', exist_ok=True)
-        caminho_completo = os.path.join('relatorios', self.nome_arquivo)
+        caminho_completo = os.path.join('relatorios', nome_arquivo)
         with open(caminho_completo, 'w', encoding='utf-8') as f:
             json.dump(relatorio, f, indent=2, ensure_ascii=False)
-
-        print(f"\n📊 RELATÓRIO DE DESEMPENHO - {self.heuristica.name}")
-        print("=" * 50)
-        print(f"⏱️  Duração: {duracao_real:.2f}s (solicitado: {self.duracao_segundos}s)")
-        print(f"🚗 Veículos processados: {estatisticas_finais['veiculos_concluidos']}")
-        print(f"🕐 Tempo médio de viagem: {estatisticas_finais['tempo_viagem_medio']:.2f}s")
-        print(f"⏸️  Tempo médio parado: {estatisticas_finais['tempo_parado_medio']:.2f}s")
-        print(f"⚡ Throughput/min: {estatisticas_finais.get('throughput_por_minuto', 0.0):.2f}")
-        print(f"📦 Backlog atual: {estatisticas_finais.get('backlog_total', 0)} | "
-              f"máx: {estatisticas_finais.get('backlog_max', 0)} | "
-              f"médio: {estatisticas_finais.get('backlog_medio', 0.0):.2f}")
-        print(f"🔁 Backlog gerado: {estatisticas_finais.get('backlog_gerado_total', 0)} | "
-              f"despachado: {estatisticas_finais.get('backlog_despachado_total', 0)}")
-        print(f"⭐ Score: {self.gerenciador_metricas.calcular_score(self.heuristica):.1f}")
-        print(f"💾 Relatório salvo: {caminho_completo}")
-        print("=" * 50)
+        
+        return caminho_completo
 
     def _calcular_eficiencia(self, estatisticas: dict) -> float:
         if estatisticas['tempo_viagem_medio'] > 0:
             return ((estatisticas['tempo_viagem_medio'] - estatisticas['tempo_parado_medio']) / 
                    estatisticas['tempo_viagem_medio']) * 100
         return 0.0
+
+

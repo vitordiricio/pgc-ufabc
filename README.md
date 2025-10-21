@@ -218,6 +218,11 @@ Para executar a heurística baseada no ChatGPT com interface gráfica, é necess
 python main.py --chatgpt --gui --openai-api-key "<seu_token>" --openai-model gpt-5-mini
 ```
 
+Caso a conexão com a API da OpenAI falhe (por exemplo, sem acesso à internet ou devido a bloqueios de proxy), a aplicação
+exibirá uma mensagem como `Unable to reach OpenAI's API (network connection error)` e retomará automaticamente a heurística
+padrão do projeto. Nenhuma outra ação é necessária além de restabelecer a conexão e reiniciar a simulação se desejar reativar o
+ChatGPT.
+
 Substitua `<seu_token>` pela sua chave real da OpenAI. Caso o modelo não seja especificado (por variável de ambiente ou flag), `gpt-5-mini` será utilizado por padrão.
 
 ### Controles da Simulação

@@ -18,20 +18,22 @@ def parse_arguments():
         epilog="""
 Exemplos de uso:
   # Simulação com interface gráfica
-  python main.py --usegui                    # Executa com interface gráfica
+  python main.py --usegui                    # Executa com interface gráfica (3x3)
+  python main.py --usegui --rows 4 --cols 5  # Executa com grade 4x5
   
   # Simulação headless com diferentes heurísticas
-  python main.py --vertical-horizontal 200   # Executa por 200s com heurística vertical/horizontal
-  python main.py --random 300               # Executa por 300s com heurística aleatória
-  python main.py --llm 180                  # Executa por 180s com heurística LLM
-  python main.py --adaptive 240             # Executa por 240s com heurística adaptativa de densidade
-  python main.py --manual 120               # Executa por 120s com controle manual
+  python main.py --vertical-horizontal 200   # Executa por 200s com heurística vertical/horizontal (3x3)
+  python main.py --random 300 --rows 2 --cols 4  # Executa por 300s com heurística aleatória (2x4)
+  python main.py --llm 180                  # Executa por 180s com heurística LLM (3x3)
+  python main.py --adaptive 240 --rows 5 --cols 5  # Executa por 240s com heurística adaptativa (5x5)
+  python main.py --rl 300                   # Executa por 300s com reinforcement learning (3x3)
+  python main.py --manual 120               # Executa por 120s com controle manual (3x3)
   
   # Reinforcement Learning
   python main.py --train-rl                 # Treina modelo RL por 100000 timesteps (padrão)
   python main.py --train-rl 500000          # Treina modelo RL por 500000 timesteps
   python main.py --train-rl 100000 --rl-save-path rl/models/my_model.zip  # Treina com caminho customizado
-  python main.py --test-rl                  # Testa modelo RL padrão
+  python main.py --test-rl                  # Testa modelo RL padrão (best_model.zip)
   python main.py --test-rl rl/models/my_model.zip --rl-episodes 10  # Testa modelo específico com 10 episódios
         """
     )
@@ -49,6 +51,8 @@ Exemplos de uso:
                        help='Executa simulação por X segundos usando heurística LLM')
     parser.add_argument('--adaptive', type=int, metavar='SECONDS',
                        help='Executa simulação por X segundos usando heurística adaptativa de densidade')
+    parser.add_argument('--rl', type=int, metavar='SECONDS',
+                       help='Executa simulação por X segundos usando reinforcement learning')
     parser.add_argument('--manual', type=int, metavar='SECONDS',
                        help='Executa simulação por X segundos usando controle manual')
     
@@ -59,10 +63,16 @@ Exemplos de uso:
                        help='Caminho para salvar o modelo RL treinado (padrão: rl/models/traffic_model.zip)')
     parser.add_argument('--rl-eval-freq', type=int, metavar='FREQ', default=10000,
                        help='Frequência de avaliação durante treinamento RL (padrão: 10000)')
-    parser.add_argument('--test-rl', type=str, metavar='MODEL_PATH', nargs='?', const='rl/models/traffic_model.zip',
-                       help='Testa modelo RL treinado (padrão: rl/models/traffic_model.zip)')
+    parser.add_argument('--test-rl', type=str, metavar='MODEL_PATH', nargs='?', const='rl/models/best_model.zip',
+                       help='Testa modelo RL treinado (padrão: rl/models/best_model.zip)')
     parser.add_argument('--rl-episodes', type=int, metavar='EPISODES', default=5,
                        help='Número de episódios para teste RL (padrão: 5)')
+    
+    # Grid size options
+    parser.add_argument('--rows', type=int, default=3, metavar='ROWS',
+                       help='Número de linhas da grade de cruzamentos (padrão: 3)')
+    parser.add_argument('--cols', type=int, default=3, metavar='COLS',
+                       help='Número de colunas da grade de cruzamentos (padrão: 3)')
     
     # Additional options
     parser.add_argument('--output', '-o', type=str, metavar='FILE',
@@ -112,7 +122,7 @@ def configurar_ambiente():
     os.makedirs('relatorios', exist_ok=True)
 
 
-def executar_modo_gui():
+def executar_modo_gui(rows: int = 3, cols: int = 3):
     # Exibe introdução
     exibir_introducao()
     
@@ -124,10 +134,10 @@ def executar_modo_gui():
     
     try:
         # Cria e executa a simulação
-        print("\nIniciando simulação...")
+        print(f"\nIniciando simulação com grade {rows}x{cols}...")
         simulacao = Simulacao(
-            linhas=CONFIG.LINHAS_GRADE,
-            colunas=CONFIG.COLUNAS_GRADE
+            linhas=rows,
+            colunas=cols
         )
         
         # Executa o loop principal
@@ -146,9 +156,13 @@ def executar_modo_gui():
 
 
 def executar_modo_headless(heuristica: TipoHeuristica, duracao: int, 
-                          nome_arquivo: str = None, verbose: bool = False):
+                          nome_arquivo: str = None, verbose: bool = False,
+                          rows: int = 3, cols: int = 3):
     """Executa a simulação sem interface gráfica."""
     try:
+        print(f"Iniciando simulação headless com grade {rows}x{cols}...")
+        # Note: SimulacaoHeadless doesn't support custom grid sizes yet
+        # For now, it uses the default grid size from CONFIG
         simulacao = SimulacaoHeadless(
             heuristica=heuristica,
             duracao_segundos=duracao,
@@ -179,22 +193,31 @@ def main():
         return
     elif args.vertical_horizontal is not None:
         executar_modo_headless(TipoHeuristica.VERTICAL_HORIZONTAL, 
-                              args.vertical_horizontal, args.output, args.verbose)
+                              args.vertical_horizontal, args.output, args.verbose,
+                              args.rows, args.cols)
     elif args.random is not None:
         executar_modo_headless(TipoHeuristica.RANDOM_OPEN_CLOSE, 
-                              args.random, args.output, args.verbose)
+                              args.random, args.output, args.verbose,
+                              args.rows, args.cols)
     elif args.llm is not None:
         executar_modo_headless(TipoHeuristica.LLM_HEURISTICA, 
-                              args.llm, args.output, args.verbose)
+                              args.llm, args.output, args.verbose,
+                              args.rows, args.cols)
     elif args.adaptive is not None:
         executar_modo_headless(TipoHeuristica.ADAPTATIVA_DENSIDADE, 
-                              args.adaptive, args.output, args.verbose)
+                              args.adaptive, args.output, args.verbose,
+                              args.rows, args.cols)
+    elif args.rl is not None:
+        executar_modo_headless(TipoHeuristica.REINFORCEMENT_LEARNING, 
+                              args.rl, args.output, args.verbose,
+                              args.rows, args.cols)
     elif args.manual is not None:
         executar_modo_headless(TipoHeuristica.MANUAL, 
-                              args.manual, args.output, args.verbose)
+                              args.manual, args.output, args.verbose,
+                              args.rows, args.cols)
     else:
         # Modo padrão: GUI
-        executar_modo_gui()
+        executar_modo_gui(args.rows, args.cols)
 
 
 if __name__ == "__main__":

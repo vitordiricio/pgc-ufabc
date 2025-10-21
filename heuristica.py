@@ -424,13 +424,17 @@ class HeuristicaReinforcementLearning(Heuristica):
         self.agent = None
         self.model_loaded = False
         self.fallback_heuristica = None
+        
+        # Preload the model to avoid freezing during simulation
+        print("🔄 Loading RL model...")
+        self._load_agent()
     
     def _inicializar_config(self) -> Dict:
         """Inicializa configurações para RL."""
         return {
             'intervalo_avaliacao': 60,  # Avalia a cada 1 segundo
             'tempo_desde_avaliacao': 0,
-            'model_path': 'rl/models/traffic_model.zip',
+            'model_path': 'rl/models/best_model.zip',  # Use best model by default
             'model_loaded': False,
             'fallback_enabled': True
         }

@@ -197,6 +197,13 @@ Para executar a heurística baseada no ChatGPT com interface gráfica, é necess
 
     > 💡 O terminal embutido do IntelliJ IDEA usa o Prompt de Comando por padrão. Execute os três comandos acima na mesma sessão para garantir que as variáveis `OPENAI_API_KEY` e `OPENAI_MODEL` sejam reconhecidas antes de iniciar o `python main.py`.
 
+    ```cmd
+    REM Versão em linha única usando o Prompt de Comando
+    set OPENAI_API_KEY=<seu_token> && set OPENAI_MODEL=gpt-5-mini && python main.py --chatgpt --gui
+    ```
+
+    > ✅ Útil no terminal do IntelliJ/CLion: copie e cole a linha acima substituindo `<seu_token>` e pressione **Enter** para definir as variáveis e iniciar a simulação de uma só vez.
+
 #### Passando credenciais pela linha de comando
 
 ```bash

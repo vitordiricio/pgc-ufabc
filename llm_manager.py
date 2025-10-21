@@ -6,8 +6,39 @@ import json
 import os
 from typing import Dict, List, Optional, Tuple
 
-from ollama import chat
-from openai import OpenAI
+try:  # Optional dependency - only required when using the Ollama heuristic
+    from ollama import chat
+except Exception:  # pragma: no cover - defensive fallback when Ollama isn't installed
+    chat = None  # type: ignore[assignment]
+
+try:  # The OpenAI SDK might be absent in environments without ChatGPT heuristic enabled
+    from openai import OpenAI
+    from openai import (
+        APIConnectionError,
+        APITimeoutError,
+        APIStatusError,
+        BadRequestError,
+        AuthenticationError,
+        RateLimitError,
+    )
+except Exception:  # pragma: no cover - keep imports optional for offline environments
+    OpenAI = None  # type: ignore[assignment]
+
+    class _OptionalDependencyError(Exception):
+        """Placeholder exception used when the OpenAI SDK is unavailable."""
+
+    APIConnectionError = (  # type: ignore[assignment]
+        APITimeoutError
+    ) = (  # type: ignore[assignment]
+        APIStatusError
+    ) = (  # type: ignore[assignment]
+        BadRequestError
+    ) = (  # type: ignore[assignment]
+        AuthenticationError
+    ) = (  # type: ignore[assignment]
+        RateLimitError
+    ) = _OptionalDependencyError
+
 from pydantic import ValidationError
 
 from llm_models import (
@@ -164,9 +195,15 @@ class LLMManager(BaseLLMManager):
 
         # Connection test
         self.llm_available = self._test_connection()
-    
+
     def _test_connection(self) -> bool:
         """Test connection to Ollama service."""
+        if chat is None:
+            print(
+                "⚠️ Ollama client is not installed. Install the 'ollama' package to use the LLM heuristic."
+            )
+            return False
+
         try:
             response = chat(
                 messages=[{'role': 'user', 'content': 'Hello'}],
@@ -240,8 +277,6 @@ class LLMManager(BaseLLMManager):
         except Exception as e:
             print(f"❌ LLM request failed: {e}")
             return self.last_decision  # Use last valid decision
-    
-        return super().apply_decisions(decisions, semaforos)
 
 
 class OpenAIChatManager(BaseLLMManager):
@@ -256,10 +291,18 @@ class OpenAIChatManager(BaseLLMManager):
         self.model_name = model_name or os.getenv("OPENAI_MODEL", "gpt-5-mini")
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         self.client: Optional[OpenAI] = None
+        self._connection_warning_shown = False
 
         self._initialize_client()
 
     def _initialize_client(self) -> None:
+        if OpenAI is None:
+            print(
+                "❌ OpenAI SDK is not installed. Run 'pip install openai' to enable the ChatGPT heuristic."
+            )
+            self.llm_available = False
+            return
+
         if not self.api_key:
             print("❌ OPENAI_API_KEY not configured. Set the environment variable to enable ChatGPT heuristic.")
             self.llm_available = False
@@ -285,9 +328,28 @@ class OpenAIChatManager(BaseLLMManager):
             if self.debug_mode:
                 print(f"✅ Connected to OpenAI model: {self.model_name}")
             return bool(response)
-        except Exception as exc:
-            print(f"❌ Failed to connect to OpenAI: {exc}")
-            print("ChatGPT heuristic will use fallback strategy")
+        except (APIConnectionError, APITimeoutError) as exc:
+            if not self._connection_warning_shown:
+                print("⚠️ Unable to reach OpenAI's API (network connection error).")
+                print("   Verify your internet access or proxy configuration. Falling back to the default heuristic.")
+                if self.debug_mode:
+                    print(f"   Details: {exc}")
+                self._connection_warning_shown = True
+            return False
+        except AuthenticationError as exc:
+            print("❌ OpenAI rejected the provided API key. Please double-check the credential and try again.")
+            if self.debug_mode:
+                print(f"   Details: {exc}")
+            return False
+        except RateLimitError as exc:
+            print("⚠️ OpenAI rate limit reached for the configured key. Using fallback heuristic until quota resets.")
+            if self.debug_mode:
+                print(f"   Details: {exc}")
+            return False
+        except (BadRequestError, APIStatusError, Exception) as exc:
+            print("❌ Failed to connect to OpenAI. ChatGPT heuristic will use fallback strategy.")
+            if self.debug_mode:
+                print(f"   Details: {exc}")
             return False
 
     def _extract_response_text(self, response) -> str:
@@ -388,6 +450,26 @@ class OpenAIChatManager(BaseLLMManager):
         except ValidationError as exc:
             print(f"❌ OpenAI response validation failed: {exc}")
             return self.last_decision
-        except Exception as exc:
-            print(f"❌ OpenAI request failed: {exc}")
+        except (APIConnectionError, APITimeoutError) as exc:
+            if not self._connection_warning_shown:
+                print("⚠️ Lost connection to OpenAI mid-request. Reverting to the previous valid decision.")
+                if self.debug_mode:
+                    print(f"   Details: {exc}")
+                self._connection_warning_shown = True
+            return self.last_decision
+        except RateLimitError as exc:
+            print("⚠️ OpenAI rate limit exceeded. Reusing the last valid decision until quota is restored.")
+            if self.debug_mode:
+                print(f"   Details: {exc}")
+            return self.last_decision
+        except AuthenticationError as exc:
+            print("❌ OpenAI rejected the API key during a request. Disabling ChatGPT heuristic.")
+            if self.debug_mode:
+                print(f"   Details: {exc}")
+            self.llm_available = False
+            return self.last_decision
+        except (BadRequestError, APIStatusError, Exception) as exc:
+            print("❌ OpenAI request failed. Reusing the last valid decision if available.")
+            if self.debug_mode:
+                print(f"   Details: {exc}")
             return self.last_decision

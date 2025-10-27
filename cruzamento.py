@@ -324,12 +324,12 @@ class Cruzamento:
 class MalhaViaria:
     """Gerencia toda a malha viária com múltiplos cruzamentos e vias de mão única."""
 
-    def __init__(self, linhas: int = CONFIG.LINHAS_GRADE, colunas: int = CONFIG.COLUNAS_GRADE):
+    def __init__(self, linhas: int = CONFIG.LINHAS_GRADE, colunas: int = CONFIG.COLUNAS_GRADE, engine: str = 'ollama'):
         self.linhas = linhas
         self.colunas = colunas
         self.veiculos: List[Veiculo] = []
         self.cruzamentos: Dict[Tuple[int, int], Cruzamento] = {}
-        self.gerenciador_semaforos = GerenciadorSemaforos(CONFIG.HEURISTICA_ATIVA)
+        self.gerenciador_semaforos = GerenciadorSemaforos(CONFIG.HEURISTICA_ATIVA, engine)
         self._inicializar_caos()
         self._criar_cruzamentos()
         self.metricas = {
@@ -542,8 +542,8 @@ class MalhaViaria:
             self.metricas['backlog_max_total'] = backlog_atual
         self.metricas['backlog_amostras_acum'] += backlog_atual
 
-    def mudar_heuristica(self, nova_heuristica: TipoHeuristica) -> None:
-        self.gerenciador_semaforos.mudar_heuristica(nova_heuristica)
+    def mudar_heuristica(self, nova_heuristica: TipoHeuristica, engine: str = 'ollama') -> None:
+        self.gerenciador_semaforos.mudar_heuristica(nova_heuristica, engine)
 
     def obter_densidade_por_cruzamento(self) -> Dict[Tuple[int, int], Dict[Direcao, int]]:
         """Retorna a densidade de veículos por cruzamento e direção."""

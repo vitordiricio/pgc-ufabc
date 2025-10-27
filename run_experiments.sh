@@ -11,7 +11,7 @@ mkdir -p relatorios
 # Configurações dos experimentos
 HEURISTICS=("vertical-horizontal" "random" "adaptive" "rl")
 DURATIONS=(60 120 180 240 300)  # 1min, 2min, 3min, 4min, 5min
-GRID_SIZES=("3x3" "4x4" "5x5")
+GRID_SIZES=("2x2" "3x3" "4x4" "5x5")
 
 # Contador de experimentos
 total_experiments=$((${#HEURISTICS[@]} * ${#DURATIONS[@]} * ${#GRID_SIZES[@]}))

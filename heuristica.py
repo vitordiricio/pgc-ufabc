@@ -552,11 +552,16 @@ class HeuristicaReinforcementLearning(Heuristica):
 class HeuristicaLLM(Heuristica):
     """Heurística usando LLM para controle inteligente."""
     
-    def __init__(self):
-        """Inicializa a heurística LLM."""
+    def __init__(self, engine: str = 'ollama'):
+        """
+        Inicializa a heurística LLM.
+        
+        Args:
+            engine: Engine to use ('ollama' or 'openai')
+        """
         super().__init__()
         from llm_manager import LLMManager
-        self.llm_manager = LLMManager()
+        self.llm_manager = LLMManager(engine=engine)
     
     def _inicializar_config(self) -> Dict:
         """Inicializa configurações para LLM."""
@@ -570,10 +575,11 @@ class HeuristicaLLM(Heuristica):
         """Atualização usando LLM para controle inteligente - MÃO ÚNICA."""
         if not self.llm_manager or not self.llm_manager.llm_available:
             # Fallback to vertical/horizontal if LLM not available
-            heuristica_fallback = HeuristicaVerticalHorizontal()
-            heuristica_fallback.tempo_ciclo = self.tempo_ciclo
-            heuristica_fallback.config = self.config.copy()
-            heuristica_fallback.atualizar(semaforos, densidade_por_cruzamento)
+            # Just update semaphores normally without LLM decision
+            for id_cruzamento, semaforos_cruzamento in semaforos.items():
+                for semaforo in semaforos_cruzamento.values():
+                    semaforo.atualizar()
+                self._verificar_alternancia_mao_unica(semaforos_cruzamento)
             return
         
         # Check if it's time to evaluate
@@ -608,21 +614,21 @@ class HeuristicaLLM(Heuristica):
                 if messages:
                     print(f"🤖 LLM Decisions: {', '.join(messages)}")
             else:
-                # Fallback to vertical/horizontal if LLM fails
+                # Fallback: just update semaphores normally without LLM decision
                 print("⚠️ LLM failed, using fallback heuristic")
-                heuristica_fallback = HeuristicaVerticalHorizontal()
-                heuristica_fallback.tempo_ciclo = self.tempo_ciclo
-                heuristica_fallback.config = self.config.copy()
-                heuristica_fallback.atualizar(semaforos, densidade_por_cruzamento)
+                for id_cruzamento, semaforos_cruzamento in semaforos.items():
+                    for semaforo in semaforos_cruzamento.values():
+                        semaforo.atualizar()
+                    self._verificar_alternancia_mao_unica(semaforos_cruzamento)
                 return
                 
         except Exception as e:
             print(f"❌ LLM heuristic error: {e}")
-            # Fallback to vertical/horizontal
-            heuristica_fallback = HeuristicaVerticalHorizontal()
-            heuristica_fallback.tempo_ciclo = self.tempo_ciclo
-            heuristica_fallback.config = self.config.copy()
-            heuristica_fallback.atualizar(semaforos, densidade_por_cruzamento)
+            # Fallback: just update semaphores normally without LLM decision
+            for id_cruzamento, semaforos_cruzamento in semaforos.items():
+                for semaforo in semaforos_cruzamento.values():
+                    semaforo.atualizar()
+                self._verificar_alternancia_mao_unica(semaforos_cruzamento)
             return
         
         # Update all semaphores normally
@@ -632,12 +638,13 @@ class HeuristicaLLM(Heuristica):
             self._verificar_alternancia_mao_unica(semaforos_cruzamento)
 
 
-def criar_heuristica(tipo: TipoHeuristica) -> Heuristica:
+def criar_heuristica(tipo: TipoHeuristica, engine: str = 'ollama') -> Heuristica:
     """
     Factory function para criar heurísticas baseado no tipo.
     
     Args:
         tipo: Tipo de heurística a ser criada
+        engine: Engine to use for LLM heuristic ('ollama' or 'openai')
         
     Returns:
         Instância da heurística correspondente
@@ -654,5 +661,9 @@ def criar_heuristica(tipo: TipoHeuristica) -> Heuristica:
     heuristica_class = heuristica_map.get(tipo)
     if not heuristica_class:
         raise ValueError(f"Tipo de heurística não suportado: {tipo}")
+    
+    # Only LLM heuristic needs the engine parameter
+    if tipo == TipoHeuristica.LLM_HEURISTICA:
+        return heuristica_class(engine=engine)
     
     return heuristica_class()

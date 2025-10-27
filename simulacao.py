@@ -164,7 +164,7 @@ class Simulacao:
     def __init__(self, heuristica: TipoHeuristica = None, use_gui: bool = True, 
                  duracao_segundos: int = None, nome_arquivo: str = None, 
                  verbose: bool = False, linhas: int = CONFIG.LINHAS_GRADE, 
-                 colunas: int = CONFIG.COLUNAS_GRADE):
+                 colunas: int = CONFIG.COLUNAS_GRADE, engine: str = 'ollama'):
         self.linhas = linhas
         self.colunas = colunas
         self.use_gui = use_gui
@@ -172,8 +172,9 @@ class Simulacao:
         self.duracao_segundos = duracao_segundos
         self.nome_arquivo = nome_arquivo
         self.verbose = verbose
+        self.engine = engine
         
-        self.malha = MalhaViaria(linhas, colunas)
+        self.malha = MalhaViaria(linhas, colunas, engine)
         self.gerenciador_metricas = GerenciadorMetricas()
         
         # Initialize renderer only for GUI mode
@@ -196,7 +197,7 @@ class Simulacao:
             self.tempo_acumulado = 0.0
         
         # Set the heuristic for the simulation
-        self.malha.mudar_heuristica(self.heuristica_atual)
+        self.malha.mudar_heuristica(self.heuristica_atual, self.engine)
 
     def processar_eventos(self) -> None:
         for evento in pygame.event.get():
@@ -242,8 +243,8 @@ class Simulacao:
 
     def _reiniciar(self) -> None:
         self._coletar_metricas()
-        self.malha = MalhaViaria(self.linhas, self.colunas)
-        self.malha.mudar_heuristica(self.heuristica_atual)
+        self.malha = MalhaViaria(self.linhas, self.colunas, self.engine)
+        self.malha.mudar_heuristica(self.heuristica_atual, self.engine)
         self.pausado = False
         self.multiplicador_velocidade = 1.0
         self.tempo_acumulado = 0.0

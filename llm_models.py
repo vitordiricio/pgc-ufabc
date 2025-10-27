@@ -16,7 +16,7 @@ class TrafficAction(Enum):
 
 class IntersectionDecision(BaseModel):
     """Decision for a specific intersection and direction."""
-    intersection_id: Tuple[int, int] = Field(..., description="Intersection coordinates (row, col)")
+    intersection_id: List[int] = Field(..., min_length=2, max_length=2, description="Intersection coordinates [row, col]")
     direction: str = Field(..., description="Direction: 'NORTH' or 'EAST'")
     action: TrafficAction = Field(..., description="Action to take")
     reasoning: str = Field(..., description="Brief explanation of why this decision was made")
@@ -27,7 +27,7 @@ class TrafficControlResponse(BaseModel):
     """Complete response from LLM for traffic control decisions."""
     decisions: List[IntersectionDecision] = Field(..., description="List of traffic light decisions")
     global_strategy: str = Field(..., description="Overall traffic management strategy being applied")
-    priority_intersections: List[Tuple[int, int]] = Field(..., description="Most critical intersections to focus on")
+    priority_intersections: List[List[int]] = Field(..., description="Most critical intersections to focus on, each as [row, col]")
     estimated_impact: str = Field(..., description="Expected outcome of these decisions")
     next_evaluation_time: int = Field(default=60, description="Seconds until next evaluation (60-300)")
 

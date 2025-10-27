@@ -26,7 +26,9 @@ Exemplos de uso:
   # Simulação headless com diferentes heurísticas
   python main.py --vertical-horizontal 200  # Executa por 200s com heurística vertical/horizontal (3x3)
   python main.py --random 300 --rows 2 --cols 4  # Executa por 300s com heurística aleatória (2x4)
-  python main.py --llm 180                  # Executa por 180s com heurística LLM (3x3)
+  python main.py --llm 180                  # Executa por 180s com heurística LLM (3x3, padrão: ollama)
+  python main.py --llm 180 --engine openai  # Executa por 180s com heurística LLM usando OpenAI
+  python main.py --llm --gui --engine openai # GUI com heurística LLM usando OpenAI
   python main.py --adaptive 240 --rows 5 --cols 5  # Executa por 240s com heurística adaptativa (5x5)
   python main.py --rl 300                   # Executa por 300s com reinforcement learning (3x3)
   
@@ -50,6 +52,8 @@ Exemplos de uso:
                        help='Executa simulação por X segundos usando heurística aleatória (ou indefinidamente com --gui)')
     parser.add_argument('--llm', type=int, metavar='SECONDS', nargs='?',
                        help='Executa simulação por X segundos usando heurística LLM (ou indefinidamente com --gui)')
+    parser.add_argument('--engine', type=str, choices=['ollama', 'openai'], default='ollama',
+                       help='Engine para usar com heurística LLM (padrão: ollama)')
     parser.add_argument('--adaptive', type=int, metavar='SECONDS', nargs='?',
                        help='Executa simulação por X segundos usando heurística adaptativa de densidade (ou indefinidamente com --gui)')
     parser.add_argument('--rl', type=int, metavar='SECONDS', nargs='?',
@@ -123,7 +127,7 @@ def configurar_ambiente():
     os.makedirs('relatorios', exist_ok=True)
 
 
-def executar_modo_gui(heuristica: TipoHeuristica, rows: int = 3, cols: int = 3):
+def executar_modo_gui(heuristica: TipoHeuristica, rows: int = 3, cols: int = 3, engine: str = 'ollama'):
     # Exibe introdução
     exibir_introducao()
     
@@ -140,7 +144,8 @@ def executar_modo_gui(heuristica: TipoHeuristica, rows: int = 3, cols: int = 3):
             heuristica=heuristica,
             use_gui=True,
             linhas=rows,
-            colunas=cols
+            colunas=cols,
+            engine=engine
         )
         
         # Executa o loop principal
@@ -160,7 +165,7 @@ def executar_modo_gui(heuristica: TipoHeuristica, rows: int = 3, cols: int = 3):
 
 def executar_modo_headless(heuristica: TipoHeuristica, duracao: int, 
                           nome_arquivo: str = None, verbose: bool = False,
-                          rows: int = 3, cols: int = 3):
+                          rows: int = 3, cols: int = 3, engine: str = 'ollama'):
     """Executa a simulação sem interface gráfica."""
     try:
         print(f"Iniciando simulação headless com grade {rows}x{cols}...")
@@ -171,7 +176,8 @@ def executar_modo_headless(heuristica: TipoHeuristica, duracao: int,
             nome_arquivo=nome_arquivo,
             verbose=verbose,
             linhas=rows,
-            colunas=cols
+            colunas=cols,
+            engine=engine
         )
         simulacao.executar()
     except KeyboardInterrupt:
@@ -251,42 +257,42 @@ def main():
     elif args.gui:
         # GUI mode - determine heuristic
         if '--vertical-horizontal' in sys.argv:
-            executar_modo_gui(TipoHeuristica.VERTICAL_HORIZONTAL, args.rows, args.cols)
+            executar_modo_gui(TipoHeuristica.VERTICAL_HORIZONTAL, args.rows, args.cols, args.engine)
         elif '--random' in sys.argv:
-            executar_modo_gui(TipoHeuristica.RANDOM_OPEN_CLOSE, args.rows, args.cols)
+            executar_modo_gui(TipoHeuristica.RANDOM_OPEN_CLOSE, args.rows, args.cols, args.engine)
         elif '--llm' in sys.argv:
-            executar_modo_gui(TipoHeuristica.LLM_HEURISTICA, args.rows, args.cols)
+            executar_modo_gui(TipoHeuristica.LLM_HEURISTICA, args.rows, args.cols, args.engine)
         elif '--adaptive' in sys.argv:
-            executar_modo_gui(TipoHeuristica.ADAPTATIVA_DENSIDADE, args.rows, args.cols)
+            executar_modo_gui(TipoHeuristica.ADAPTATIVA_DENSIDADE, args.rows, args.cols, args.engine)
         elif '--rl' in sys.argv:
-            executar_modo_gui(TipoHeuristica.REINFORCEMENT_LEARNING, args.rows, args.cols)
+            executar_modo_gui(TipoHeuristica.REINFORCEMENT_LEARNING, args.rows, args.cols, args.engine)
         elif '--manual' in sys.argv:
-            executar_modo_gui(TipoHeuristica.MANUAL, args.rows, args.cols)
+            executar_modo_gui(TipoHeuristica.MANUAL, args.rows, args.cols, args.engine)
         else:
             # Default heuristic
-            executar_modo_gui(CONFIG.HEURISTICA_ATIVA, args.rows, args.cols)
+            executar_modo_gui(CONFIG.HEURISTICA_ATIVA, args.rows, args.cols, args.engine)
     else:
         # Headless mode
         if args.vertical_horizontal is not None:
             executar_modo_headless(TipoHeuristica.VERTICAL_HORIZONTAL, 
                                   args.vertical_horizontal, args.output, args.verbose,
-                                  args.rows, args.cols)
+                                  args.rows, args.cols, args.engine)
         elif args.random is not None:
             executar_modo_headless(TipoHeuristica.RANDOM_OPEN_CLOSE, 
                                   args.random, args.output, args.verbose,
-                                  args.rows, args.cols)
+                                  args.rows, args.cols, args.engine)
         elif args.llm is not None:
             executar_modo_headless(TipoHeuristica.LLM_HEURISTICA, 
                                   args.llm, args.output, args.verbose,
-                                  args.rows, args.cols)
+                                  args.rows, args.cols, args.engine)
         elif args.adaptive is not None:
             executar_modo_headless(TipoHeuristica.ADAPTATIVA_DENSIDADE, 
                                   args.adaptive, args.output, args.verbose,
-                                  args.rows, args.cols)
+                                  args.rows, args.cols, args.engine)
         elif args.rl is not None:
             executar_modo_headless(TipoHeuristica.REINFORCEMENT_LEARNING, 
                                   args.rl, args.output, args.verbose,
-                                  args.rows, args.cols)
+                                  args.rows, args.cols, args.engine)
 
 
 if __name__ == "__main__":

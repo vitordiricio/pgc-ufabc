@@ -132,15 +132,17 @@ class Semaforo:
 class GerenciadorSemaforos:
     """Gerencia todos os semáforos com suporte a heurísticas - MÃO ÚNICA."""
     
-    def __init__(self, heuristica: TipoHeuristica = TipoHeuristica.VERTICAL_HORIZONTAL):
+    def __init__(self, heuristica: TipoHeuristica = TipoHeuristica.VERTICAL_HORIZONTAL, engine: str = 'ollama'):
         """
         Inicializa o gerenciador.
         
         Args:
             heuristica: Tipo de heurística a ser utilizada
+            engine: Engine to use for LLM heuristic ('ollama' or 'openai')
         """
         self.tipo_heuristica = heuristica
-        self.heuristica: Heuristica = criar_heuristica(heuristica)
+        self.engine = engine
+        self.heuristica: Heuristica = criar_heuristica(heuristica, engine)
         self.semaforos: Dict[Tuple[int, int], Dict[Direcao, Semaforo]] = {}
         self.tempo_ciclo = 0
         self.estatisticas_globais = {
@@ -217,10 +219,10 @@ class GerenciadorSemaforos:
         self.heuristica.atualizar(self.semaforos, densidade_por_cruzamento)
     
     
-    def mudar_heuristica(self, nova_heuristica: TipoHeuristica) -> None:
+    def mudar_heuristica(self, nova_heuristica: TipoHeuristica, engine: str = 'ollama') -> None:
         """Muda a heurística de controle."""
         self.tipo_heuristica = nova_heuristica
-        self.heuristica = criar_heuristica(nova_heuristica)
+        self.heuristica = criar_heuristica(nova_heuristica, engine)
         self.tempo_ciclo = 0
     
     def obter_info_heuristica(self) -> str:

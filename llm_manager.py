@@ -1,27 +1,32 @@
 """
-LLM Manager for traffic control using Ollama with structured output.
+LLM Manager for traffic control using Ollama or OpenAI with structured output.
 """
 import json
+import os
 from typing import Dict, List, Optional, Tuple
 from ollama import chat
+from openai import OpenAI
 from pydantic import ValidationError
-import json
+from dotenv import load_dotenv
 
 from llm_models import TrafficControlResponse, TrafficStateData, IntersectionDecision, TrafficAction
 from configuracao import CONFIG, Direcao, EstadoSemaforo
 
+# Load environment variables
+load_dotenv()
+
 
 class LLMManager:
-    """Manages LLM-based traffic control decisions using Ollama."""
+    """Manages LLM-based traffic control decisions using Ollama or OpenAI."""
     
-    def __init__(self, model_name: str = "gemma3:1b"):
+    def __init__(self, engine: str = "ollama"):
         """
         Initialize the LLM manager.
         
         Args:
-            model_name: Name of the Ollama model to use
+            engine: LLM engine to use ('ollama' or 'openai')
         """
-        self.model_name = model_name
+        self.engine = engine
         self.last_evaluation_time = 0
         self.evaluation_interval = 600  # Evaluate every 10 seconds (600 frames at 60 FPS) - much reduced frequency
         self.response_cache = {}
@@ -30,22 +35,112 @@ class LLMManager:
         self.last_decision = None
         self.debug_mode = True  # Enable debug output
         
-        # Connection test
-        self.llm_available = self._test_connection()
+        # Set model name based on engine
+        if engine == "ollama":
+            self.model_name = os.getenv('OLLAMA_MODEL', 'gemma3:1b')
+            self.llm_available = True  # Assume available, will fail gracefully on first call
+        elif engine == "openai":
+            self.model_name = os.getenv('OPENAI_MODEL', 'gpt-5-mini')
+            self.api_key = os.getenv('OPENAI_API_KEY')
+            if not self.api_key:
+                print(f"❌ OPENAI_API_KEY not found in environment variables")
+                print("LLM heuristic will use fallback strategy")
+                self.llm_available = False
+            else:
+                self.llm_available = True  # Assume available, will fail gracefully on first call
+        else:
+            print(f"❌ Unknown engine: {engine}")
+            self.llm_available = False
     
-    def _test_connection(self) -> bool:
-        """Test connection to Ollama service."""
+    def _call_llm(self, prompt: str, schema: dict) -> Optional[str]:
+        """
+        Call the appropriate LLM engine with structured output.
+        
+        Args:
+            prompt: The prompt to send to the LLM
+            schema: JSON schema for structured output
+            
+        Returns:
+            str: JSON response from the LLM, or None if failed
+        """
         try:
-            response = chat(
-                messages=[{'role': 'user', 'content': 'Hello'}],
-                model=self.model_name
-            )
-            print(f"✅ Connected to Ollama model: {self.model_name}")
-            return True
+            if self.engine == "ollama":
+                return self._call_ollama(prompt, schema)
+            elif self.engine == "openai":
+                return self._call_openai(prompt, schema)
+            else:
+                return None
         except Exception as e:
-            print(f"❌ Failed to connect to Ollama: {e}")
-            print("LLM heuristic will use fallback strategy")
-            return False
+            print(f"❌ LLM call failed: {e}")
+            return None
+    
+    def _call_ollama(self, prompt: str, schema: dict) -> Optional[str]:
+        """Call Ollama API with structured output."""
+        response = chat(
+            messages=[{'role': 'user', 'content': prompt}],
+            model=self.model_name,
+            format=schema,
+            options={
+                'temperature': 0.1,  # Lower temperature for more consistent responses
+            }
+        )
+        
+        if self.debug_mode:
+            print(f"🤖 LLM response received (type: {type(response)})")
+            # Try to safely extract and print the content
+            try:
+                content = self._extract_content(response)
+                if content:
+                    print("🤖 LLM Response Content:")
+                    print(content)
+            except Exception as e:
+                print(f"🤖 Could not extract content for display: {e}")
+        
+        # Parse response content using helper function
+        content = self._extract_content(response)
+        if content:
+            return content
+        
+        # Fallback: convert to string if no content found
+        return str(response)
+    
+    def _extract_content(self, response) -> Optional[str]:
+        """Safely extract content from various response types."""
+        if isinstance(response, dict):
+            if 'message' in response:
+                return response['message'].get('content')
+            elif 'content' in response:
+                return response['content']
+        elif hasattr(response, 'message'):
+            if hasattr(response.message, 'content'):
+                return response.message.content
+        elif hasattr(response, 'content'):
+            return response.content
+        return None
+    
+    def _call_openai(self, prompt: str, schema: dict) -> Optional[str]:
+        """Call OpenAI API with structured output using .parse() method."""
+        from llm_models import TrafficControlResponse
+        client = OpenAI(api_key=self.api_key)
+        
+        # Use the official .parse() method for structured output
+        response = client.responses.parse(
+            model=self.model_name,
+            input=[
+                {'role': 'user', 'content': prompt}
+            ],
+            text_format=TrafficControlResponse
+        )
+        
+        if self.debug_mode:
+            print(f"🤖 LLM response received (type: {type(response)})")
+            print("🤖 Response parsed successfully")
+        
+        # Extract the parsed output and convert back to JSON
+        if response.output_parsed:
+            # Convert back to JSON string for consistency with Ollama
+            return response.output_parsed.model_dump_json()
+        return None
     
     def should_evaluate(self, current_time: int) -> bool:
         """
@@ -150,33 +245,14 @@ Make 1-2 decisions max."""
             if self.debug_mode:
                 print(f"🤖 Sending prompt to LLM (length: {len(prompt)} chars)")
             
-            # Add timeout and simplified prompt for faster response
-            response = chat(
-                messages=[{'role': 'user', 'content': prompt}],
-                model=self.model_name,
-                format=TrafficControlResponse.model_json_schema(),
-                options={
-                    'temperature': 0.1,  # Lower temperature for more consistent responses
-                }
-            )
+            # Get schema for structured output
+            schema = TrafficControlResponse.model_json_schema()
             
-            if self.debug_mode:
-                print(f"🤖 LLM response received (type: {type(response)})")
-                # Pretty-print the entire Ollama response including all metadata
-                print("🤖 Complete LLM Response:")
-                print(json.dumps(response, indent=2, ensure_ascii=False))
+            # Call LLM with abstraction layer
+            content = self._call_llm(prompt, schema)
             
-            # Parse and validate the response - handle different response formats
-            if isinstance(response, dict) and 'message' in response:
-                content = response['message']['content']
-            elif hasattr(response, 'message') and hasattr(response.message, 'content'):
-                content = response.message.content
-            elif hasattr(response, 'content'):
-                content = response.content
-            elif isinstance(response, dict) and 'content' in response:
-                content = response['content']
-            else:
-                content = str(response)
+            if not content:
+                return self.last_decision
             
             decisions = TrafficControlResponse.model_validate_json(content)
             
@@ -209,7 +285,8 @@ Make 1-2 decisions max."""
         messages = []
         
         for decision in decisions.decisions:
-            intersection_id = decision.intersection_id
+            # Convert list to tuple for dictionary key lookup
+            intersection_id = tuple(decision.intersection_id)
             direction_str = decision.direction
             action = decision.action
             

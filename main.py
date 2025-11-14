@@ -6,6 +6,8 @@ Autores: Vitor Bobig Diricio e Thiago Schwartz Machado
 import pygame
 import os
 import argparse
+import time
+from datetime import datetime
 from configuracao import CONFIG, TipoHeuristica
 from simulacao import Simulacao
 
@@ -239,20 +241,74 @@ def validate_arguments(args):
 def main():
     """Função principal do programa."""
     import sys
+    
+    # Record start time
+    start_time = time.time()
+    start_datetime = datetime.now()
+    start_str = start_datetime.strftime("%H:%M:%S.%f")[:-3]  # Hours:Minutes:Seconds.Milliseconds
+    
+    print(f"\n{'='*60}")
+    print(f"PROGRAM START TIME: {start_str}")
+    print(f"{'='*60}\n")
+    
     args = parse_arguments()
     
     # Validate arguments
     if not validate_arguments(args):
+        # Record end time even if validation fails
+        end_time = time.time()
+        end_datetime = datetime.now()
+        end_str = end_datetime.strftime("%H:%M:%S.%f")[:-3]
+        duration = end_time - start_time
+        hours = int(duration // 3600)
+        minutes = int((duration % 3600) // 60)
+        seconds = int(duration % 60)
+        milliseconds = int((duration % 1) * 1000)
+        print(f"\n{'='*60}")
+        print(f"PROGRAM END TIME: {end_str}")
+        print(f"TOTAL DURATION: {hours:02d}h {minutes:02d}m {seconds:02d}s {milliseconds:03d}ms")
+        print(f"TOTAL DURATION (seconds): {duration:.6f}")
+        print(f"{'='*60}\n")
         return
     
     # Determina o modo de execução
     if args.train_rl is not None:
         print("Opção --train-rl detectada. Use 'python train_rl.py' para treinar o modelo RL.")
         print("Exemplo: python train_rl.py --timesteps 100000")
+        # Record end time
+        end_time = time.time()
+        end_datetime = datetime.now()
+        end_str = end_datetime.strftime("%H:%M:%S.%f")[:-3]
+        duration = end_time - start_time
+        hours = int(duration // 3600)
+        minutes = int((duration % 3600) // 60)
+        seconds = int(duration % 60)
+        milliseconds = int((duration % 1) * 1000)
+        print(f"\n{'='*60}")
+        print(f"PROGRAM START TIME: {start_str}")
+        print(f"PROGRAM END TIME: {end_str}")
+        print(f"TOTAL DURATION: {hours:02d}h {minutes:02d}m {seconds:02d}s {milliseconds:03d}ms")
+        print(f"TOTAL DURATION (seconds): {duration:.6f}")
+        print(f"{'='*60}\n")
         return
     elif args.test_rl is not None:
         print("Opção --test-rl detectada. Use 'python test_rl.py' para testar o modelo RL.")
         print("Exemplo: python test_rl.py --model-path rl/models/traffic_model.zip")
+        # Record end time
+        end_time = time.time()
+        end_datetime = datetime.now()
+        end_str = end_datetime.strftime("%H:%M:%S.%f")[:-3]
+        duration = end_time - start_time
+        hours = int(duration // 3600)
+        minutes = int((duration % 3600) // 60)
+        seconds = int(duration % 60)
+        milliseconds = int((duration % 1) * 1000)
+        print(f"\n{'='*60}")
+        print(f"PROGRAM START TIME: {start_str}")
+        print(f"PROGRAM END TIME: {end_str}")
+        print(f"TOTAL DURATION: {hours:02d}h {minutes:02d}m {seconds:02d}s {milliseconds:03d}ms")
+        print(f"TOTAL DURATION (seconds): {duration:.6f}")
+        print(f"{'='*60}\n")
         return
     elif args.gui:
         # GUI mode - determine heuristic
@@ -293,6 +349,25 @@ def main():
             executar_modo_headless(TipoHeuristica.REINFORCEMENT_LEARNING, 
                                   args.rl, args.output, args.verbose,
                                   args.rows, args.cols, args.engine)
+    
+    # Record end time
+    end_time = time.time()
+    end_datetime = datetime.now()
+    end_str = end_datetime.strftime("%H:%M:%S.%f")[:-3]  # Hours:Minutes:Seconds.Milliseconds
+    duration = end_time - start_time
+    
+    # Calculate hours, minutes, seconds, milliseconds
+    hours = int(duration // 3600)
+    minutes = int((duration % 3600) // 60)
+    seconds = int(duration % 60)
+    milliseconds = int((duration % 1) * 1000)
+    
+    print(f"\n{'='*60}")
+    print(f"PROGRAM START TIME: {start_str}")
+    print(f"PROGRAM END TIME: {end_str}")
+    print(f"TOTAL DURATION: {hours:02d}h {minutes:02d}m {seconds:02d}s {milliseconds:03d}ms")
+    print(f"TOTAL DURATION (seconds): {duration:.6f}")
+    print(f"{'='*60}\n")
 
 
 if __name__ == "__main__":

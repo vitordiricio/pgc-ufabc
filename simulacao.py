@@ -351,24 +351,28 @@ class Simulacao:
             total=self.duracao_segundos,
             desc=f"Simulação {self.heuristica_atual.name}",
             unit="s",
-            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt}s [{elapsed}<{remaining}, {rate_fmt}]"
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt}s (sim) [{elapsed}<{remaining}, {rate_fmt}]"
         )
 
         try:
             while True:
-                tempo_atual = time.time()
-                tempo_decorrido = tempo_atual - self.tempo_inicio
+                # Track simulation time (this is what we should use for break condition)
+                simulation_time_frames = self.malha.metricas.get('tempo_simulacao', 0)
+                simulation_time_seconds = simulation_time_frames / CONFIG.FPS
 
+                # Update progress bar with SIMULATION time, not real time
                 if progress_bar:
-                    progress_bar.n = int(tempo_decorrido)
+                    progress_bar.n = int(simulation_time_seconds)
                     progress_bar.refresh()
 
-                if tempo_decorrido >= self.duracao_segundos:
+                # BREAK CONDITION: Use SIMULATION TIME, not real time!
+                # This ensures we run for the requested simulation duration, regardless of LLM blocking
+                if simulation_time_seconds >= self.duracao_segundos:
                     break
 
                 dt = 1.0 / self.fps
                 self.tempo_acumulado += dt
-
+                
                 while self.tempo_acumulado >= 1.0 / CONFIG.FPS:
                     self.malha.atualizar()
                     self.tempo_acumulado -= 1.0 / CONFIG.FPS
@@ -380,6 +384,13 @@ class Simulacao:
         finally:
             if progress_bar:
                 progress_bar.close()
+            
+            final_simulation_time = self.malha.metricas.get('tempo_simulacao', 0) / CONFIG.FPS
+            final_real_time = time.time() - self.tempo_inicio
+            print(f"\n[DEBUG] HEADLESS END:")
+            print(f"  - Final simulation time: {final_simulation_time:.2f}s ({self.malha.metricas.get('tempo_simulacao', 0)} frames)")
+            print(f"  - Final real time: {final_real_time:.2f}s")
+            print(f"  - Requested duration: {self.duracao_segundos}s (simulation time)")
 
         self.tempo_fim = time.time()
         self._finalizar_headless()

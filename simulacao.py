@@ -5,12 +5,14 @@ import pygame
 import json
 import os
 import time
+import queue
 from datetime import datetime
 from typing import Dict
 from configuracao import CONFIG, TipoHeuristica, Direcao, EstadoSemaforo
 from cruzamento import MalhaViaria
 from renderizador import Renderizador
 from tqdm import tqdm
+from llm_manager import LLMWorker
 
 
 class GerenciadorMetricas:
@@ -124,7 +126,7 @@ class GerenciadorMetricas:
                 }
         return comparacao
 
-    def salvar_relatorio(self, nome_arquivo: str = None, estatisticas_finais: Dict = None, 
+    def salvar_relatorio(self, nome_arquivo: str = None, estatisticas_finais: Dict = None,
                         linhas: int = None, colunas: int = None) -> str:
         if nome_arquivo is None:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -161,9 +163,9 @@ class GerenciadorMetricas:
 class Simulacao:
     """Classe principal que coordena toda a simulação de tráfego."""
 
-    def __init__(self, heuristica: TipoHeuristica = None, use_gui: bool = True, 
-                 duracao_segundos: int = None, nome_arquivo: str = None, 
-                 verbose: bool = False, linhas: int = CONFIG.LINHAS_GRADE, 
+    def __init__(self, heuristica: TipoHeuristica = None, use_gui: bool = True,
+                 duracao_segundos: int = None, nome_arquivo: str = None,
+                 verbose: bool = False, linhas: int = CONFIG.LINHAS_GRADE,
                  colunas: int = CONFIG.COLUNAS_GRADE, engine: str = 'ollama'):
         self.linhas = linhas
         self.colunas = colunas
@@ -173,15 +175,29 @@ class Simulacao:
         self.nome_arquivo = nome_arquivo
         self.verbose = verbose
         self.engine = engine
-        
-        self.malha = MalhaViaria(linhas, colunas, engine)
+
+        # LLM Worker Thread setup
+        self.llm_request_queue = queue.Queue()
+        self.llm_response_queue = queue.Queue()
+        if self.heuristica_atual == TipoHeuristica.LLM_HEURISTICA:
+            self.llm_worker = LLMWorker(self.llm_request_queue, self.llm_response_queue, self.engine)
+            self.llm_worker.start()
+        else:
+            self.llm_worker = None
+
+        self.malha = MalhaViaria(
+            linhas, colunas, engine,
+            request_queue=self.llm_request_queue,
+            response_queue=self.llm_response_queue
+        )
         self.gerenciador_metricas = GerenciadorMetricas()
-        
+
         # Initialize renderer only for GUI mode
         if self.use_gui:
             self.renderizador = Renderizador()
             self.rodando = True
             self.pausado = False
+            self.awaiting_llm_response = False # New state for pausing simulation
             self.mostrar_estatisticas = True
             self.multiplicador_velocidade = 1.0
             self.tempo_acumulado = 0.0
@@ -195,7 +211,7 @@ class Simulacao:
             self.tempo_fim = None
             self.fps = 60
             self.tempo_acumulado = 0.0
-        
+
         # Set the heuristic for the simulation
         self.malha.mudar_heuristica(self.heuristica_atual, self.engine)
 
@@ -258,24 +274,29 @@ class Simulacao:
     def _finalizar_simulacao(self) -> None:
         self._coletar_metricas()
         print("\nSimulação finalizada!")
-        
+
         # Auto-save report for GUI mode
         self._gerar_relatorio_gui()
-        
+
+        # Stop the LLM worker thread
+        if self.llm_worker:
+            self.llm_request_queue.put((None, None)) # Sentinel to stop the worker
+            self.llm_worker.join(timeout=2) # Wait for the worker to finish
+
         self.rodando = False
-    
+
     def _gerar_relatorio_gui(self) -> None:
         """Generate and save report for GUI mode using headless pattern."""
         try:
             estatisticas = self.malha.obter_estatisticas()
-            
+
             # Calculate duration (approximate from simulation time)
             duracao_real = self.malha.metricas['tempo_simulacao'] / CONFIG.FPS
-            
+
             # Generate filename using headless pattern
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             nome_arquivo = f"relatorio_{self.heuristica_atual.name.lower()}_{timestamp}.json"
-            
+
             # Use unified report generation
             self._gerar_relatorio_unificado(
                 estatisticas=estatisticas,
@@ -286,9 +307,9 @@ class Simulacao:
                 nome_arquivo=nome_arquivo,
                 modo='gui'
             )
-            
+
             print(f"Relatório salvo automaticamente: {nome_arquivo}")
-            
+
         except Exception as e:
             print(f"Erro ao salvar relatório: {str(e)}")
 
@@ -297,19 +318,33 @@ class Simulacao:
         self.gerenciador_metricas.registrar_metricas(estatisticas, self.heuristica_atual)
 
     def atualizar(self, dt: float) -> None:
-        if self.pausado:
+        if self.pausado or self.awaiting_llm_response:
+            # If paused by user or waiting for LLM, do not update simulation state
             return
+
         self.tempo_acumulado += dt * self.multiplicador_velocidade
         while self.tempo_acumulado >= 1.0 / CONFIG.FPS:
-            self.malha.atualizar()
+            # Malha.atualizar now returns a boolean indicating if it's waiting for LLM
+            is_waiting = self.malha.atualizar()
+            if is_waiting:
+                self.awaiting_llm_response = True
+                self._mostrar_mensagem("Aguardando decisão da Inteligência Artificial...")
+                break  # Exit the update loop to pause simulation time
+
             self.tempo_acumulado -= 1.0 / CONFIG.FPS
             if self.malha.metricas['tempo_simulacao'] % CONFIG.INTERVALO_METRICAS == 0:
                 self._coletar_metricas()
 
     def renderizar(self) -> None:
+        estado_str = 'Executando'
+        if self.pausado:
+            estado_str = 'Pausado'
+        elif self.awaiting_llm_response:
+            estado_str = 'Aguardando LLM'
+
         info_simulacao = {
             'velocidade': self.multiplicador_velocidade,
-            'estado': 'Pausado' if self.pausado else 'Executando',
+            'estado': estado_str,
             'fps': self.renderizador.obter_fps(),
             'score': self.gerenciador_metricas.calcular_score(self.heuristica_atual)
         }
@@ -326,7 +361,7 @@ class Simulacao:
             self._executar_gui()
         else:
             self._executar_headless()
-    
+
     def _executar_gui(self) -> None:
         """Execute simulation in GUI mode."""
         clock = pygame.time.Clock()
@@ -334,16 +369,39 @@ class Simulacao:
         print("Pressione F1 para ajuda com os controles.")
         while self.rodando:
             dt = clock.tick(CONFIG.FPS) / 1000.0
+            
             self.processar_eventos()
+            
+            # Non-blocking check for LLM response
+            try:
+                llm_decision = self.llm_response_queue.get_nowait()
+                if llm_decision:
+                    # Apply decision and unpause
+                    print("🤖 Decisão do LLM recebida e aplicada.")
+                    self.malha.gerenciador_semaforos.heuristica.ultima_decisao = llm_decision
+                else:
+                    print("⚠️ LLM retornou uma decisão inválida ou um erro.")
+                
+                self.awaiting_llm_response = False
+                self.mensagem_temporaria = None # Clear "waiting" message
+            except queue.Empty:
+                pass # No response yet, continue as normal
+
             self.atualizar(dt)
             self.renderizar()
+
+        # Cleanup worker thread on exit
+        if self.llm_worker:
+            self.llm_request_queue.put((None, None))
+            self.llm_worker.join(timeout=2)
+
         print("\nSimulação encerrada.")
         pygame.quit()
-    
+
     def _executar_headless(self) -> None:
         """Execute simulation in headless mode."""
         self._inicializar_headless()
-        
+
         if self.verbose:
             print("Executando simulação...")
 
@@ -372,7 +430,7 @@ class Simulacao:
 
                 dt = 1.0 / self.fps
                 self.tempo_acumulado += dt
-                
+
                 while self.tempo_acumulado >= 1.0 / CONFIG.FPS:
                     self.malha.atualizar()
                     self.tempo_acumulado -= 1.0 / CONFIG.FPS
@@ -384,7 +442,7 @@ class Simulacao:
         finally:
             if progress_bar:
                 progress_bar.close()
-            
+
             final_simulation_time = self.malha.metricas.get('tempo_simulacao', 0) / CONFIG.FPS
             final_real_time = time.time() - self.tempo_inicio
             print(f"\n[DEBUG] HEADLESS END:")
@@ -394,7 +452,7 @@ class Simulacao:
 
         self.tempo_fim = time.time()
         self._finalizar_headless()
-    
+
     def _inicializar_headless(self) -> None:
         """Initialize headless simulation."""
         self.tempo_inicio = time.time()
@@ -403,7 +461,7 @@ class Simulacao:
             print(f"Iniciando simulação headless com heurística: {self.heuristica_atual.name}")
             print(f"Duração: {self.duracao_segundos} segundos")
             print(f"Grade: {self.linhas}x{self.colunas}")
-    
+
     def _finalizar_headless(self) -> None:
         """Finalize headless simulation and generate report."""
         duracao_real = self.tempo_fim - self.tempo_inicio
@@ -414,7 +472,7 @@ class Simulacao:
         estatisticas_finais = self.malha.obter_estatisticas()
         self.gerenciador_metricas.registrar_metricas(estatisticas_finais, self.heuristica_atual)
         self._gerar_relatorio_headless(duracao_real, estatisticas_finais)
-    
+
     def _gerar_relatorio_headless(self, duracao_real: float, estatisticas_finais: dict):
         """Generate headless report using the same pattern as before."""
         if not self.nome_arquivo:
@@ -448,8 +506,8 @@ class Simulacao:
         print(f"Relatório salvo: {caminho_completo}")
         print("=" * 50)
 
-    def _gerar_relatorio_unificado(self, estatisticas: dict, duracao_real: float, 
-                                  duracao_solicitada: int, tempo_inicio: datetime, 
+    def _gerar_relatorio_unificado(self, estatisticas: dict, duracao_real: float,
+                                  duracao_solicitada: int, tempo_inicio: datetime,
                                   tempo_fim: datetime, nome_arquivo: str, modo: str) -> str:
         """Unified report generation for both GUI and headless modes."""
         relatorio = {
@@ -502,12 +560,12 @@ class Simulacao:
         caminho_completo = os.path.join('relatorios', nome_arquivo)
         with open(caminho_completo, 'w', encoding='utf-8') as f:
             json.dump(relatorio, f, indent=2, ensure_ascii=False)
-        
+
         return caminho_completo
 
     def _calcular_eficiencia(self, estatisticas: dict) -> float:
         if estatisticas['tempo_viagem_medio'] > 0:
-            return ((estatisticas['tempo_viagem_medio'] - estatisticas['tempo_parado_medio']) / 
+            return ((estatisticas['tempo_viagem_medio'] - estatisticas['tempo_parado_medio']) /
                    estatisticas['tempo_viagem_medio']) * 100
         return 0.0
 

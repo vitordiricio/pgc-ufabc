@@ -4,7 +4,8 @@ Sistema com vias de mão única: Horizontal (Leste→Oeste) e Vertical (Norte→
 """
 import random
 import math
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
+import queue
 from configuracao import CONFIG, Direcao, TipoHeuristica
 from veiculo import Veiculo
 from semaforo import Semaforo, GerenciadorSemaforos
@@ -324,12 +325,17 @@ class Cruzamento:
 class MalhaViaria:
     """Gerencia toda a malha viária com múltiplos cruzamentos e vias de mão única."""
 
-    def __init__(self, linhas: int = CONFIG.LINHAS_GRADE, colunas: int = CONFIG.COLUNAS_GRADE, engine: str = 'ollama'):
+    def __init__(self, linhas: int = CONFIG.LINHAS_GRADE, colunas: int = CONFIG.COLUNAS_GRADE, engine: str = 'ollama',
+                 request_queue: Optional[queue.Queue] = None, response_queue: Optional[queue.Queue] = None):
         self.linhas = linhas
         self.colunas = colunas
         self.veiculos: List[Veiculo] = []
         self.cruzamentos: Dict[Tuple[int, int], Cruzamento] = {}
-        self.gerenciador_semaforos = GerenciadorSemaforos(CONFIG.HEURISTICA_ATIVA, engine)
+        self.gerenciador_semaforos = GerenciadorSemaforos(
+            CONFIG.HEURISTICA_ATIVA, engine,
+            request_queue=request_queue,
+            response_queue=response_queue
+        )
         self._inicializar_caos()
         self._criar_cruzamentos()
         self.metricas = {
@@ -474,7 +480,11 @@ class MalhaViaria:
         d1 = arr[c] * (k - f)
         return d0 + d1
 
-    def atualizar(self) -> None:
+    def atualizar(self) -> bool:
+        """
+        Atualiza o estado da malha viária para um frame.
+        Retorna True se a simulação deve pausar para aguardar o LLM.
+        """
         self.metricas['tempo_simulacao'] += 1
         self.atualizar_caos()
 
@@ -516,7 +526,8 @@ class MalhaViaria:
         for id_cruzamento, cruzamento in self.cruzamentos.items():
             densidade_por_cruzamento[id_cruzamento] = cruzamento.obter_densidade_por_direcao()
 
-        self.gerenciador_semaforos.atualizar(densidade_por_cruzamento)
+        # Atualiza semáforos e verifica se precisa aguardar o LLM
+        is_waiting_for_llm = self.gerenciador_semaforos.atualizar(densidade_por_cruzamento)
 
         # Remove veículos inativos e coleta métricas
         veiculos_ativos = []
@@ -541,6 +552,8 @@ class MalhaViaria:
         if backlog_atual > self.metricas['backlog_max_total']:
             self.metricas['backlog_max_total'] = backlog_atual
         self.metricas['backlog_amostras_acum'] += backlog_atual
+
+        return is_waiting_for_llm
 
     def mudar_heuristica(self, nova_heuristica: TipoHeuristica, engine: str = 'ollama') -> None:
         self.gerenciador_semaforos.mudar_heuristica(nova_heuristica, engine)

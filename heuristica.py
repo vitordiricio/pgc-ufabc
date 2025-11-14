@@ -560,78 +560,62 @@ class HeuristicaLLM(Heuristica):
             engine: Engine to use ('ollama' or 'openai')
         """
         super().__init__()
-        from llm_manager import LLMManager
-        self.llm_manager = LLMManager(engine=engine)
+        # Mantém uma referência à última decisão recebida
+        self.ultima_decisao = None
     
     def _inicializar_config(self) -> Dict:
         """Inicializa configurações para LLM."""
-        return {
-            'intervalo_avaliacao': 120,  # Avalia densidade a cada 2 segundos
-            'tempo_desde_avaliacao': 0
-        }
+        return {}
     
+    def aplicar_decisao(self, semaforos: Dict[Tuple[int, int], Dict[Direcao, 'Semaforo']]) -> None:
+        """Aplica a última decisão do LLM aos semáforos."""
+        from llm_models import TrafficAction
+
+        if not self.ultima_decisao:
+            return
+
+        messages = []
+        for decision in self.ultima_decisao.decisions:
+            intersection_id = tuple(decision.intersection_id)
+            direction_str = decision.direction
+            action = decision.action
+            
+            if intersection_id not in semaforos:
+                continue
+                
+            direction = Direcao.NORTE if direction_str.upper() == "NORTH" else Direcao.LESTE
+            
+            if direction not in semaforos[intersection_id]:
+                continue
+                
+            semaforo = semaforos[intersection_id][direction]
+            
+            if action == TrafficAction.CHANGE_TO_GREEN and semaforo.estado != EstadoSemaforo.VERDE:
+                semaforo.forcar_mudanca(EstadoSemaforo.VERDE)
+                messages.append(f"Cruzamento {intersection_id} {direction_str}: Aberto")
+            elif action == TrafficAction.CHANGE_TO_RED and semaforo.estado != EstadoSemaforo.VERMELHO:
+                semaforo.forcar_mudanca(EstadoSemaforo.VERMELHO)
+                messages.append(f"Cruzamento {intersection_id} {direction_str}: Fechado")
+            elif action == TrafficAction.EXTEND_GREEN and semaforo.estado == EstadoSemaforo.VERDE:
+                semaforo.definir_tempo_verde(semaforo.tempo_maximo_estado + 60)
+                messages.append(f"Cruzamento {intersection_id} {direction_str}: Verde Estendido")
+        
+        if messages:
+            print(f"🤖 Ações LLM: {', '.join(messages)}")
+        
+        # Reseta a decisão para que não seja aplicada novamente
+        self.ultima_decisao = None
+
     def atualizar(self, semaforos: Dict[Tuple[int, int], Dict[Direcao, 'Semaforo']], 
                   densidade_por_cruzamento: Dict[Tuple[int, int], Dict[Direcao, int]]) -> None:
-        """Atualização usando LLM para controle inteligente - MÃO ÚNICA."""
-        if not self.llm_manager or not self.llm_manager.llm_available:
-            # Fallback to vertical/horizontal if LLM not available
-            # Just update semaphores normally without LLM decision
-            for id_cruzamento, semaforos_cruzamento in semaforos.items():
-                for semaforo in semaforos_cruzamento.values():
-                    semaforo.atualizar()
-                self._verificar_alternancia_mao_unica(semaforos_cruzamento)
-            return
+        """
+        Atualiza os semáforos. A lógica de pedir a decisão ao LLM foi movida
+        para o GerenciadorSemaforos. Esta heurística apenas aplica a decisão quando disponível.
+        """
+        # Aplica a última decisão recebida do worker, se houver uma.
+        self.aplicar_decisao(semaforos)
         
-        # Check if it's time to evaluate
-        if not self.llm_manager.should_evaluate(self.tempo_ciclo):
-            # Just update semaphores normally without LLM decision
-            for id_cruzamento, semaforos_cruzamento in semaforos.items():
-                for semaforo in semaforos_cruzamento.values():
-                    semaforo.atualizar()
-                self._verificar_alternancia_mao_unica(semaforos_cruzamento)
-            return
-        
-        try:
-            # Prepare traffic state data
-            global_metrics = {
-                'total_vehicles': sum(sum(densidade.values()) for densidade in densidade_por_cruzamento.values()),
-                'average_wait_time': 0,  # TODO: Calculate from vehicle data
-                'traffic_density': 'medium'  # TODO: Calculate based on density
-            }
-            
-            traffic_state = self.llm_manager.prepare_traffic_state(
-                densidade_por_cruzamento, 
-                semaforos, 
-                global_metrics
-            )
-            
-            # Get LLM decisions with timeout handling
-            decisions = self.llm_manager.get_traffic_decisions(traffic_state, self.tempo_ciclo)
-            
-            if decisions:
-                # Apply LLM decisions
-                messages = self.llm_manager.apply_decisions(decisions, semaforos)
-                if messages:
-                    print(f"🤖 LLM Decisions: {', '.join(messages)}")
-            else:
-                # Fallback: just update semaphores normally without LLM decision
-                print("⚠️ LLM failed, using fallback heuristic")
-                for id_cruzamento, semaforos_cruzamento in semaforos.items():
-                    for semaforo in semaforos_cruzamento.values():
-                        semaforo.atualizar()
-                    self._verificar_alternancia_mao_unica(semaforos_cruzamento)
-                return
-                
-        except Exception as e:
-            print(f"❌ LLM heuristic error: {e}")
-            # Fallback: just update semaphores normally without LLM decision
-            for id_cruzamento, semaforos_cruzamento in semaforos.items():
-                for semaforo in semaforos_cruzamento.values():
-                    semaforo.atualizar()
-                self._verificar_alternancia_mao_unica(semaforos_cruzamento)
-            return
-        
-        # Update all semaphores normally
+        # A lógica de fallback e a atualização normal dos semáforos continuam
         for id_cruzamento, semaforos_cruzamento in semaforos.items():
             for semaforo in semaforos_cruzamento.values():
                 semaforo.atualizar()

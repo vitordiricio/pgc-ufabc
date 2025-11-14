@@ -3,8 +3,10 @@ Módulo de semáforo com suporte a múltiplas heurísticas de controle.
 Sistema com vias de mão única: Horizontal (Leste→Oeste) e Vertical (Norte→Sul)
 """
 from typing import Tuple, Dict, Optional
+import queue
 from configuracao import CONFIG, EstadoSemaforo, Direcao, TipoHeuristica
 from heuristica import criar_heuristica, Heuristica
+from llm_manager import LLMManager # Import for static methods
 
 
 class Semaforo:
@@ -132,16 +134,22 @@ class Semaforo:
 class GerenciadorSemaforos:
     """Gerencia todos os semáforos com suporte a heurísticas - MÃO ÚNICA."""
     
-    def __init__(self, heuristica: TipoHeuristica = TipoHeuristica.VERTICAL_HORIZONTAL, engine: str = 'ollama'):
+    def __init__(self, heuristica: TipoHeuristica = TipoHeuristica.VERTICAL_HORIZONTAL, engine: str = 'ollama',
+                 request_queue: Optional[queue.Queue] = None, response_queue: Optional[queue.Queue] = None):
         """
         Inicializa o gerenciador.
         
         Args:
             heuristica: Tipo de heurística a ser utilizada
             engine: Engine to use for LLM heuristic ('ollama' or 'openai')
+            request_queue: Queue for sending requests to the LLM worker
+            response_queue: Queue for receiving responses from the LLM worker
         """
         self.tipo_heuristica = heuristica
         self.engine = engine
+        self.request_queue = request_queue
+        self.response_queue = response_queue
+        
         self.heuristica: Heuristica = criar_heuristica(heuristica, engine)
         self.semaforos: Dict[Tuple[int, int], Dict[Direcao, Semaforo]] = {}
         self.tempo_ciclo = 0
@@ -150,6 +158,10 @@ class GerenciadorSemaforos:
             'tempo_espera_total': 0,
             'mudancas_estado': 0
         }
+        
+        # State for LLM evaluation timing
+        self.last_llm_evaluation_time = 0
+        self.llm_evaluation_interval = CONFIG.LLM_EVALUATION_INTERVAL  # In frames
         
         self._click_rect = None  # retângulo usado para clique
 
@@ -185,7 +197,6 @@ class GerenciadorSemaforos:
 
         return (sem.id_cruzamento, sem.direcao, sem.estado)
 
-    
     def adicionar_semaforo(self, semaforo: Semaforo) -> None:
         """Adiciona um semáforo ao gerenciador."""
         id_cruzamento = semaforo.id_cruzamento
@@ -206,17 +217,34 @@ class GerenciadorSemaforos:
                     sem._mudar_para_estado(EstadoSemaforo.VERMELHO)
                 elif sem.estado == EstadoSemaforo.VERMELHO:
                     sem._mudar_para_estado(EstadoSemaforo.VERDE)
-    
-    def atualizar(self, densidade_por_cruzamento: Dict[Tuple[int, int], Dict[Direcao, int]]) -> None:
+
+    def _should_evaluate_llm(self) -> bool:
+        """Check if it's time to call the LLM."""
+        return self.tipo_heuristica == TipoHeuristica.LLM_HEURISTICA and \
+               (self.tempo_ciclo - self.last_llm_evaluation_time) >= self.llm_evaluation_interval
+
+    def atualizar(self, densidade_por_cruzamento: Dict[Tuple[int, int], Dict[Direcao, int]]) -> bool:
         """
-        Atualiza todos os semáforos baseado na heurística ativa.
-        
-        Args:
-            densidade_por_cruzamento: Número de veículos por direção em cada cruzamento
+        Atualiza todos os semáforos. Retorna True se está aguardando uma resposta do LLM.
         """
         self.tempo_ciclo += 1
+        
+        if self._should_evaluate_llm():
+            print(f"[GerenciadorSemaforos] Condição de avaliação LLM atendida no frame {self.tempo_ciclo}.")
+            traffic_state = LLMManager.prepare_traffic_state(
+                densidade_por_cruzamento,
+                self.semaforos,
+                self.estatisticas_globais  # Passar estatísticas globais
+            )
+            if self.request_queue:
+                self.request_queue.put((traffic_state, self.tempo_ciclo))
+                self.last_llm_evaluation_time = self.tempo_ciclo
+                return True  # Indica que está aguardando o LLM
+        
+        # Heurísticas normais (incluindo a aplicação da última decisão do LLM)
         self.heuristica.tempo_ciclo = self.tempo_ciclo
         self.heuristica.atualizar(self.semaforos, densidade_por_cruzamento)
+        return False
     
     
     def mudar_heuristica(self, nova_heuristica: TipoHeuristica, engine: str = 'ollama') -> None:

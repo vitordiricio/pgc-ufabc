@@ -75,48 +75,45 @@ class LLMManager:
             print(f"❌ Unknown engine: {engine}")
             self.llm_available = False
 
-    def _call_llm(self, prompt: str, schema: dict) -> Optional[str]:
-        try:
-            if self.engine == "ollama":
-                return self._call_ollama(prompt, schema)
-            elif self.engine == "openai":
-                return self._call_openai(prompt)
-            return None
-        except Exception as e:
-            print(f"❌ LLM call failed: {e}")
-            return None
+    def _extract_content(self, response) -> Optional[str]:
+        """Safely extract content from various response types."""
+        if isinstance(response, dict):
+            if 'message' in response:
+                return response['message'].get('content')
+            elif 'content' in response:
+                return response['content']
+        elif hasattr(response, 'message') and hasattr(response.message, 'content'):
+            return response.message.content
+        elif hasattr(response, 'content'):
+            return response.content
+        return None
 
     def _call_ollama(self, prompt: str, schema: dict) -> Optional[str]:
         response = chat(
             messages=[{'role': 'user', 'content': prompt}],
             model=self.model_name,
-            format='json' if schema else None,
+            format=schema,  # Use schema for structured output with Ollama
             options={'temperature': 0.1}
         )
-        content = response.get('message', {}).get('content') if isinstance(response, dict) else None
+        if self.debug_mode:
+            print(f"🤖 Ollama response received (type: {type(response)})")
+        
+        content = self._extract_content(response)
         if self.debug_mode and content:
             print(f"🤖 LLM Response Content:\n{content}")
         return content
 
-    def _call_openai(self, prompt: str) -> Optional[str]:
+    def _call_openai(self, prompt: str) -> Optional[TrafficControlResponse]:
         client = OpenAI(api_key=self.api_key)
-        
-        # Use the official .parse() method for structured output
         response = client.responses.parse(
             model=self.model_name,
-            input=[
-                {'role': 'user', 'content': prompt}
-            ],
+            input=[{'role': 'user', 'content': prompt}],
             text_format=TrafficControlResponse
         )
         if self.debug_mode:
             print("🤖 OpenAI response received.")
         
-
-        if response and response.output_parsed:
-            content = response.output_parsed
-            return content
-        return None
+        return response.output_parsed if response else None
 
     @staticmethod
     def prepare_traffic_state(
@@ -176,16 +173,22 @@ class LLMManager:
                 print(f"🤖 Sending prompt to LLM (length: {len(prompt)} chars) at sim time {current_time}")
             
             start_time = time.time()
-            content = self._call_llm(prompt, TrafficControlResponse.model_json_schema())
+            decisions = None
+
+            if self.engine == 'ollama':
+                schema = TrafficControlResponse.model_json_schema()
+                content = self._call_ollama(prompt, schema)
+                if content:
+                    decisions = TrafficControlResponse.model_validate_json(content)
+            elif self.engine == 'openai':
+                decisions = self._call_openai(prompt)
+
             duration = time.time() - start_time
             
             if self.debug_mode:
                 print(f"🤖 LLM call duration: {duration:.2f}s")
 
-            if not content:
-                return None
-            
-            return TrafficControlResponse.model_validate_json(content)
+            return decisions
             
         except ValidationError as e:
             print(f"❌ LLM response validation failed: {e}")

@@ -380,7 +380,7 @@ class Simulacao:
                     print("🤖 Decisão do LLM recebida e aplicada.")
                     self.malha.gerenciador_semaforos.heuristica.ultima_decisao = llm_decision
                 else:
-                    print("⚠️ LLM retornou uma decisão inválida ou um erro.")
+                    print(f"⚠️ LLM retornou uma decisão inválida ou um erro. Valor recebido da fila: {llm_decision!r}")
                 
                 self.awaiting_llm_response = False
                 self.mensagem_temporaria = None # Clear "waiting" message

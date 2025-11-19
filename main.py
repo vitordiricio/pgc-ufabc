@@ -19,49 +19,39 @@ def parse_arguments():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Exemplos de uso:
-  # Simulação com interface gráfica
-  python main.py --gui                      # Executa com interface gráfica (heurística padrão, 3x3)
-  python main.py --adaptive --gui           # Executa com heurística adaptativa em modo GUI (3x3)
-  python main.py --gui --rows 4 --cols 5    # Executa com grade 4x5 (heurística padrão)
-  python main.py --manual --gui             # Executa com controle manual (requer GUI)
+  # Simulação com interface gráfica (Modo Padrão)
+  python main.py                            # Executa com heurística padrão (3x3)
+  python main.py --adaptive                 # Executa com heurística adaptativa
+  python main.py --rows 4 --cols 5          # Executa com grade 4x5
+  python main.py --manual                   # Executa com controle manual
   
-  # Simulação headless com diferentes heurísticas
-  python main.py --vertical-horizontal 200  # Executa por 200s com heurística vertical/horizontal (3x3)
-  python main.py --random 300 --rows 2 --cols 4  # Executa por 300s com heurística aleatória (2x4)
-  python main.py --llm 180                  # Executa por 180s com heurística LLM (3x3, padrão: ollama)
-  python main.py --llm 180 --engine openai  # Executa por 180s com heurística LLM usando OpenAI
-  python main.py --llm --gui --engine openai # GUI com heurística LLM usando OpenAI
-  python main.py --adaptive 240 --rows 5 --cols 5  # Executa por 240s com heurística adaptativa (5x5)
-  python main.py --rl 300                   # Executa por 300s com reinforcement learning (3x3)
+  # Simulação com tempo definido (fecha automaticamente)
+  python main.py --vertical-horizontal 200  # Executa por 200s com heurística vertical/horizontal
+  python main.py --random 300               # Executa por 300s com heurística aleatória
+  python main.py --llm 180                  # Executa por 180s com heurística LLM
+  python main.py --rl 60                    # Executa por 60s com reinforcement learning
   
   # Reinforcement Learning
-  python main.py --train-rl                 # Treina modelo RL por 100000 timesteps (padrão)
-  python main.py --train-rl 500000          # Treina modelo RL por 500000 timesteps
-  python main.py --train-rl 100000 --rl-save-path rl/models/my_model.zip  # Treina com caminho customizado
-  python main.py --test-rl                  # Testa modelo RL padrão (best_model.zip)
-  python main.py --test-rl rl/models/my_model.zip --rl-episodes 10  # Testa modelo específico com 10 episódios
+  python main.py --train-rl                 # Treina modelo RL
+  python main.py --test-rl                  # Testa modelo RL
         """
     )
     
-    # GUI mode
-    parser.add_argument('--gui', action='store_true',
-                       help='Executa a simulação com interface gráfica (executa indefinidamente)')
-    
-    # Heuristic-specific modes
+    # Heuristic-specific modes with optional duration
     parser.add_argument('--vertical-horizontal', type=int, metavar='SECONDS', nargs='?',
-                       help='Executa simulação por X segundos usando heurística vertical/horizontal (ou indefinidamente com --gui)')
+                       help='Executa usando heurística vertical/horizontal (opcional: duração em segundos)')
     parser.add_argument('--random', type=int, metavar='SECONDS', nargs='?',
-                       help='Executa simulação por X segundos usando heurística aleatória (ou indefinidamente com --gui)')
+                       help='Executa usando heurística aleatória (opcional: duração em segundos)')
     parser.add_argument('--llm', type=int, metavar='SECONDS', nargs='?',
-                       help='Executa simulação por X segundos usando heurística LLM (ou indefinidamente com --gui)')
+                       help='Executa usando heurística LLM (opcional: duração em segundos)')
     parser.add_argument('--engine', type=str, choices=['ollama', 'openai'], default='ollama',
                        help='Engine para usar com heurística LLM (padrão: ollama)')
     parser.add_argument('--adaptive', type=int, metavar='SECONDS', nargs='?',
-                       help='Executa simulação por X segundos usando heurística adaptativa de densidade (ou indefinidamente com --gui)')
+                       help='Executa usando heurística adaptativa (opcional: duração em segundos)')
     parser.add_argument('--rl', type=int, metavar='SECONDS', nargs='?',
-                       help='Executa simulação por X segundos usando reinforcement learning (ou indefinidamente com --gui)')
+                       help='Executa usando reinforcement learning (opcional: duração em segundos)')
     parser.add_argument('--manual', type=int, metavar='SECONDS', nargs='?',
-                       help='Executa simulação por X segundos usando controle manual (ou indefinidamente com --gui, requer --gui)')
+                       help='Executa usando controle manual (opcional: duração em segundos)')
     
     # Reinforcement Learning options
     parser.add_argument('--train-rl', type=int, metavar='TIMESTEPS', nargs='?', const=100000,
@@ -129,7 +119,7 @@ def configurar_ambiente():
     os.makedirs('relatorios', exist_ok=True)
 
 
-def executar_modo_gui(heuristica: TipoHeuristica, rows: int = 3, cols: int = 3, engine: str = 'ollama'):
+def executar_modo_gui(heuristica: TipoHeuristica, duracao: int = None, rows: int = 3, cols: int = 3, engine: str = 'ollama'):
     # Exibe introdução
     exibir_introducao()
     
@@ -142,9 +132,13 @@ def executar_modo_gui(heuristica: TipoHeuristica, rows: int = 3, cols: int = 3, 
     try:
         # Cria e executa a simulação
         print(f"\nIniciando simulação com grade {rows}x{cols}...")
+        if duracao:
+            print(f"Duração definida: {duracao} segundos")
+
         simulacao = Simulacao(
             heuristica=heuristica,
             use_gui=True,
+            duracao_segundos=duracao,
             linhas=rows,
             colunas=cols,
             engine=engine
@@ -165,31 +159,6 @@ def executar_modo_gui(heuristica: TipoHeuristica, rows: int = 3, cols: int = 3, 
         print("\nSimulação finalizada.")
 
 
-def executar_modo_headless(heuristica: TipoHeuristica, duracao: int, 
-                          nome_arquivo: str = None, verbose: bool = False,
-                          rows: int = 3, cols: int = 3, engine: str = 'ollama'):
-    """Executa a simulação sem interface gráfica."""
-    try:
-        print(f"Iniciando simulação headless com grade {rows}x{cols}...")
-        simulacao = Simulacao(
-            heuristica=heuristica,
-            use_gui=False,
-            duracao_segundos=duracao,
-            nome_arquivo=nome_arquivo,
-            verbose=verbose,
-            linhas=rows,
-            colunas=cols,
-            engine=engine
-        )
-        simulacao.executar()
-    except KeyboardInterrupt:
-        print("\n\nSimulação interrompida pelo usuário.")
-    except Exception as e:
-        print(f"\nErro durante a execução: {e}")
-        import traceback
-        traceback.print_exc()
-
-
 def validate_arguments(args):
     """Validate command line arguments for conflicts and requirements."""
     import sys
@@ -208,31 +177,6 @@ def validate_arguments(args):
     # Check for multiple heuristics
     if heuristic_count > 1:
         print("ERRO: Apenas uma heurística pode ser especificada por vez.")
-        return False
-    
-    # Check manual heuristic requirements
-    if '--manual' in sys.argv and not args.gui:
-        print("ERRO: Heurística manual requer modo GUI (--gui).")
-        print("Use: python main.py --manual --gui")
-        return False
-    
-    # Check GUI mode conflicts
-    if args.gui and heuristic_count > 0:
-        # Check if any heuristic has duration specified (not None means duration was provided)
-        heuristic_args = [
-            args.vertical_horizontal, args.random, args.llm, 
-            args.adaptive, args.rl, args.manual
-        ]
-        for heuristic_arg in heuristic_args:
-            if heuristic_arg is not None:
-                print("ERRO: Modo GUI não aceita duração em segundos.")
-                print("Use: python main.py --adaptive --gui (sem duração)")
-                return False
-    
-    # Check headless mode requirements
-    if not args.gui and heuristic_count == 0:
-        print("ERRO: Modo headless requer especificação de heurística e duração.")
-        print("Use: python main.py --adaptive 200")
         return False
     
     return True
@@ -310,45 +254,32 @@ def main():
         print(f"TOTAL DURATION (seconds): {duration:.6f}")
         print(f"{'='*60}\n")
         return
-    elif args.gui:
-        # GUI mode - determine heuristic
-        if '--vertical-horizontal' in sys.argv:
-            executar_modo_gui(TipoHeuristica.VERTICAL_HORIZONTAL, args.rows, args.cols, args.engine)
-        elif '--random' in sys.argv:
-            executar_modo_gui(TipoHeuristica.RANDOM_OPEN_CLOSE, args.rows, args.cols, args.engine)
-        elif '--llm' in sys.argv:
-            executar_modo_gui(TipoHeuristica.LLM_HEURISTICA, args.rows, args.cols, args.engine)
-        elif '--adaptive' in sys.argv:
-            executar_modo_gui(TipoHeuristica.ADAPTATIVA_DENSIDADE, args.rows, args.cols, args.engine)
-        elif '--rl' in sys.argv:
-            executar_modo_gui(TipoHeuristica.REINFORCEMENT_LEARNING, args.rows, args.cols, args.engine)
-        elif '--manual' in sys.argv:
-            executar_modo_gui(TipoHeuristica.MANUAL, args.rows, args.cols, args.engine)
-        else:
-            # Default heuristic
-            executar_modo_gui(CONFIG.HEURISTICA_ATIVA, args.rows, args.cols, args.engine)
-    else:
-        # Headless mode
-        if args.vertical_horizontal is not None:
-            executar_modo_headless(TipoHeuristica.VERTICAL_HORIZONTAL, 
-                                  args.vertical_horizontal, args.output, args.verbose,
-                                  args.rows, args.cols, args.engine)
-        elif args.random is not None:
-            executar_modo_headless(TipoHeuristica.RANDOM_OPEN_CLOSE, 
-                                  args.random, args.output, args.verbose,
-                                  args.rows, args.cols, args.engine)
-        elif args.llm is not None:
-            executar_modo_headless(TipoHeuristica.LLM_HEURISTICA, 
-                                  args.llm, args.output, args.verbose,
-                                  args.rows, args.cols, args.engine)
-        elif args.adaptive is not None:
-            executar_modo_headless(TipoHeuristica.ADAPTATIVA_DENSIDADE, 
-                                  args.adaptive, args.output, args.verbose,
-                                  args.rows, args.cols, args.engine)
-        elif args.rl is not None:
-            executar_modo_headless(TipoHeuristica.REINFORCEMENT_LEARNING, 
-                                  args.rl, args.output, args.verbose,
-                                  args.rows, args.cols, args.engine)
+
+    # Determine heuristic and duration
+    heuristica = CONFIG.HEURISTICA_ATIVA
+    duracao = None
+    
+    if '--vertical-horizontal' in sys.argv:
+        heuristica = TipoHeuristica.VERTICAL_HORIZONTAL
+        duracao = args.vertical_horizontal
+    elif '--random' in sys.argv:
+        heuristica = TipoHeuristica.RANDOM_OPEN_CLOSE
+        duracao = args.random
+    elif '--llm' in sys.argv:
+        heuristica = TipoHeuristica.LLM_HEURISTICA
+        duracao = args.llm
+    elif '--adaptive' in sys.argv:
+        heuristica = TipoHeuristica.ADAPTATIVA_DENSIDADE
+        duracao = args.adaptive
+    elif '--rl' in sys.argv:
+        heuristica = TipoHeuristica.REINFORCEMENT_LEARNING
+        duracao = args.rl
+    elif '--manual' in sys.argv:
+        heuristica = TipoHeuristica.MANUAL
+        duracao = args.manual
+        
+    # Execute directly in GUI mode (headless is gone)
+    executar_modo_gui(heuristica, duracao, args.rows, args.cols, args.engine)
     
     # Record end time
     end_time = time.time()

@@ -11,7 +11,6 @@ from typing import Dict
 from configuracao import CONFIG, TipoHeuristica, Direcao, EstadoSemaforo
 from cruzamento import MalhaViaria
 from renderizador import Renderizador
-from tqdm import tqdm
 from llm_manager import LLMWorker
 
 
@@ -192,25 +191,18 @@ class Simulacao:
         )
         self.gerenciador_metricas = GerenciadorMetricas()
 
-        # Initialize renderer only for GUI mode
-        if self.use_gui:
-            self.renderizador = Renderizador()
-            self.rodando = True
-            self.pausado = False
-            self.awaiting_llm_response = False # New state for pausing simulation
-            self.mostrar_estatisticas = True
-            self.multiplicador_velocidade = 1.0
-            self.tempo_acumulado = 0.0
-            self.tempo_por_heuristica = {}
-            self.inicio_heuristica = pygame.time.get_ticks()
-            self.mensagem_temporaria = None
-            self.tempo_mensagem = 0
-        else:
-            # Headless mode variables
-            self.tempo_inicio = None
-            self.tempo_fim = None
-            self.fps = 60
-            self.tempo_acumulado = 0.0
+        # Initialize renderer (always active now)
+        self.renderizador = Renderizador()
+        self.rodando = True
+        self.pausado = False
+        self.awaiting_llm_response = False # New state for pausing simulation
+        self.mostrar_estatisticas = True
+        self.multiplicador_velocidade = 1.0
+        self.tempo_acumulado = 0.0
+        self.tempo_por_heuristica = {}
+        self.inicio_heuristica = pygame.time.get_ticks()
+        self.mensagem_temporaria = None
+        self.tempo_mensagem = 0
 
         # Set the heuristic for the simulation
         self.malha.mudar_heuristica(self.heuristica_atual, self.engine)
@@ -356,12 +348,6 @@ class Simulacao:
             else:
                 self.mensagem_temporaria = None
 
-    def executar(self) -> None:
-        if self.use_gui:
-            self._executar_gui()
-        else:
-            self._executar_headless()
-
     def _executar_gui(self) -> None:
         """Execute simulation in GUI mode."""
         clock = pygame.time.Clock()
@@ -389,6 +375,14 @@ class Simulacao:
 
             self.atualizar(dt)
             self.renderizar()
+            
+            # Check for duration limit if specified
+            if self.duracao_segundos is not None:
+                simulation_time_frames = self.malha.metricas.get('tempo_simulacao', 0)
+                simulation_time_seconds = simulation_time_frames / CONFIG.FPS
+                if simulation_time_seconds >= self.duracao_segundos:
+                    print(f"\nTempo de simulação ({self.duracao_segundos}s) atingido.")
+                    self._finalizar_simulacao()
 
         # Cleanup worker thread on exit
         if self.llm_worker:
@@ -398,113 +392,8 @@ class Simulacao:
         print("\nSimulação encerrada.")
         pygame.quit()
 
-    def _executar_headless(self) -> None:
-        """Execute simulation in headless mode."""
-        self._inicializar_headless()
-
-        if self.verbose:
-            print("Executando simulação...")
-
-        progress_bar = tqdm(
-            total=self.duracao_segundos,
-            desc=f"Simulação {self.heuristica_atual.name}",
-            unit="s",
-            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt}s (sim) [{elapsed}<{remaining}, {rate_fmt}]"
-        )
-
-        try:
-            while True:
-                # Track simulation time (this is what we should use for break condition)
-                simulation_time_frames = self.malha.metricas.get('tempo_simulacao', 0)
-                simulation_time_seconds = simulation_time_frames / CONFIG.FPS
-
-                # Update progress bar with SIMULATION time, not real time
-                if progress_bar:
-                    progress_bar.n = int(simulation_time_seconds)
-                    progress_bar.refresh()
-
-                # BREAK CONDITION: Use SIMULATION TIME, not real time!
-                # This ensures we run for the requested simulation duration, regardless of LLM blocking
-                if simulation_time_seconds >= self.duracao_segundos:
-                    break
-
-                dt = 1.0 / self.fps
-                self.tempo_acumulado += dt
-
-                while self.tempo_acumulado >= 1.0 / CONFIG.FPS:
-                    self.malha.atualizar()
-                    self.tempo_acumulado -= 1.0 / CONFIG.FPS
-                    if self.malha.metricas['tempo_simulacao'] % CONFIG.INTERVALO_METRICAS == 0:
-                        self._coletar_metricas()
-
-                time.sleep(0.001)
-
-        finally:
-            if progress_bar:
-                progress_bar.close()
-
-            final_simulation_time = self.malha.metricas.get('tempo_simulacao', 0) / CONFIG.FPS
-            final_real_time = time.time() - self.tempo_inicio
-            print(f"\n[DEBUG] HEADLESS END:")
-            print(f"  - Final simulation time: {final_simulation_time:.2f}s ({self.malha.metricas.get('tempo_simulacao', 0)} frames)")
-            print(f"  - Final real time: {final_real_time:.2f}s")
-            print(f"  - Requested duration: {self.duracao_segundos}s (simulation time)")
-
-        self.tempo_fim = time.time()
-        self._finalizar_headless()
-
-    def _inicializar_headless(self) -> None:
-        """Initialize headless simulation."""
-        self.tempo_inicio = time.time()
-
-        if self.verbose:
-            print(f"Iniciando simulação headless com heurística: {self.heuristica_atual.name}")
-            print(f"Duração: {self.duracao_segundos} segundos")
-            print(f"Grade: {self.linhas}x{self.colunas}")
-
-    def _finalizar_headless(self) -> None:
-        """Finalize headless simulation and generate report."""
-        duracao_real = self.tempo_fim - self.tempo_inicio
-
-        if self.verbose:
-            print(f"\nSimulação concluída em {duracao_real:.2f} segundos")
-
-        estatisticas_finais = self.malha.obter_estatisticas()
-        self.gerenciador_metricas.registrar_metricas(estatisticas_finais, self.heuristica_atual)
-        self._gerar_relatorio_headless(duracao_real, estatisticas_finais)
-
-    def _gerar_relatorio_headless(self, duracao_real: float, estatisticas_finais: dict):
-        """Generate headless report using the same pattern as before."""
-        if not self.nome_arquivo:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            self.nome_arquivo = f"relatorio_{self.heuristica_atual.name.lower()}_{timestamp}.json"
-
-        # Use unified report generation
-        caminho_completo = self._gerar_relatorio_unificado(
-            estatisticas=estatisticas_finais,
-            duracao_real=duracao_real,
-            duracao_solicitada=self.duracao_segundos,
-            tempo_inicio=datetime.fromtimestamp(self.tempo_inicio),
-            tempo_fim=datetime.fromtimestamp(self.tempo_fim),
-            nome_arquivo=self.nome_arquivo,
-            modo='headless'
-        )
-
-        print(f"\nRELATÓRIO DE DESEMPENHO - {self.heuristica_atual.name}")
-        print("=" * 50)
-        print(f"Duração: {duracao_real:.2f}s (solicitado: {self.duracao_segundos}s)")
-        print(f"Veículos processados: {estatisticas_finais['veiculos_concluidos']}")
-        print(f"Tempo médio de viagem: {estatisticas_finais['tempo_viagem_medio']:.2f}s")
-        print(f"Tempo médio parado: {estatisticas_finais['tempo_parado_medio']:.2f}s")
-        print(f"Throughput/min: {estatisticas_finais.get('throughput_por_minuto', 0.0):.2f}")
-        print(f"Backlog atual: {estatisticas_finais.get('backlog_total', 0)} | "
-              f"máx: {estatisticas_finais.get('backlog_max', 0)} | "
-              f"médio: {estatisticas_finais.get('backlog_medio', 0.0):.2f}")
-        print(f"Backlog gerado: {estatisticas_finais.get('backlog_gerado_total', 0)} | "
-              f"despachado: {estatisticas_finais.get('backlog_despachado_total', 0)}")
-        print(f"Score: {self.gerenciador_metricas.calcular_score(self.heuristica_atual):.1f}")
-        print(f"Relatório salvo: {caminho_completo}")
-        print("=" * 50)
+    def executar(self) -> None:
+        self._executar_gui()
 
     def _gerar_relatorio_unificado(self, estatisticas: dict, duracao_real: float,
                                   duracao_solicitada: int, tempo_inicio: datetime,
@@ -518,7 +407,7 @@ class Simulacao:
                 'inicio': tempo_inicio.isoformat(),
                 'fim': tempo_fim.isoformat(),
                 'grade': f"{self.linhas}x{self.colunas}",
-                'fps': CONFIG.FPS if modo == 'gui' else self.fps,
+                'fps': CONFIG.FPS,
                 'modo': modo
             },
             'metricas': {

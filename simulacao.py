@@ -408,7 +408,8 @@ class Simulacao:
                 'fim': tempo_fim.isoformat(),
                 'grade': f"{self.linhas}x{self.colunas}",
                 'fps': CONFIG.FPS,
-                'modo': modo
+                'modo': modo,
+                'engine': self.engine
             },
             'metricas': {
                 'veiculos_concluidos': estatisticas['veiculos_concluidos'],

@@ -218,6 +218,10 @@ def main():
         print(f"{'='*60}\n")
         return
     
+    # FIX: Update global configuration with provided arguments
+    CONFIG.LINHAS_GRADE = args.rows
+    CONFIG.COLUNAS_GRADE = args.cols
+    
     # Determina o modo de execução
     if args.train_rl is not None:
         print("Opção --train-rl detectada. Use 'python train_rl.py' para treinar o modelo RL.")

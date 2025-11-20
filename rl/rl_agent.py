@@ -18,7 +18,9 @@ class RLTrafficAgent:
     def __init__(self, 
                  config: Optional[Dict[str, Any]] = None,
                  model_path: Optional[str] = None):
-        self.config = config or self._get_default_config()
+        self.config = self._get_default_config()
+        if config:
+            self.config.update(config)
         self.model = None
         self.model_path = model_path or "rl/models/traffic_model.zip"
         
@@ -60,7 +62,8 @@ class RLTrafficAgent:
             ent_coef=self.config['ent_coef'],
             vf_coef=self.config['vf_coef'],
             max_grad_norm=self.config['max_grad_norm'],
-            verbose=self.config['verbose']
+            verbose=self.config['verbose'],
+            device='cpu'
         )
         
     def train(self, 

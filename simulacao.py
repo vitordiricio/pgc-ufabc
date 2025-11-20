@@ -446,6 +446,18 @@ class Simulacao:
             }
         }
 
+        # Add RL configuration if applicable
+        if self.heuristica_atual == TipoHeuristica.REINFORCEMENT_LEARNING:
+            try:
+                heuristica_instance = self.malha.gerenciador_semaforos.heuristica
+                if hasattr(heuristica_instance, 'agent') and heuristica_instance.agent:
+                    relatorio['configuracao']['rl_config'] = {
+                        'model_path': getattr(heuristica_instance.agent, 'model_path', 'unknown'),
+                        'hyperparameters': getattr(heuristica_instance.agent, 'config', {})
+                    }
+            except Exception as e:
+                print(f"Warning: Could not extract RL config for report: {e}")
+
         os.makedirs('relatorios', exist_ok=True)
         caminho_completo = os.path.join('relatorios', nome_arquivo)
         with open(caminho_completo, 'w', encoding='utf-8') as f:

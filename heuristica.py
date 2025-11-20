@@ -434,7 +434,7 @@ class HeuristicaReinforcementLearning(Heuristica):
         return {
             'intervalo_avaliacao': 60,  # Avalia a cada 1 segundo
             'tempo_desde_avaliacao': 0,
-            'model_path': 'rl/models/best_model.zip',  # Use best model by default
+            'model_path': CONFIG.RL_MODEL_PATH,  # Use configured model path
             'model_loaded': False,
             'fallback_enabled': True
         }

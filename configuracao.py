@@ -141,6 +141,9 @@ class Configuracao:
     # LLM Heuristic
     LLM_EVALUATION_INTERVAL: int = 600  # Evaluate every 10 seconds (600 frames at 60 FPS)
 
+    # RL Configuration
+    RL_MODEL_PATH: str = "rl/models/best_model.zip"
+
     # Tempos adaptativos baseados em densidade
     TEMPO_VERDE_DENSIDADE_BAIXA: int = 120   # 2 segundos
     TEMPO_VERDE_DENSIDADE_MEDIA: int = 180   # 3 segundos

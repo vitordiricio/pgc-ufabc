@@ -5,6 +5,7 @@ Simple command-line interface for training.
 
 import argparse
 import os
+from typing import Dict, Any, Optional
 from stable_baselines3.common.callbacks import EvalCallback
 from stable_baselines3.common.monitor import Monitor
 
@@ -13,7 +14,8 @@ from rl import TrafficRLEnvironment, RLTrafficAgent
 
 def train_agent(timesteps: int = 100000, 
                 save_path: str = "rl/models/traffic_model.zip",
-                eval_freq: int = 10000):
+                eval_freq: int = 10000,
+                hyperparams: Optional[Dict[str, Any]] = None):
     """Train RL agent for traffic control."""
     
     print("="*60)
@@ -27,7 +29,9 @@ def train_agent(timesteps: int = 100000,
     
     # Create agent
     print("Creating RL agent...")
-    agent = RLTrafficAgent()
+    if hyperparams:
+        print(f"Using custom hyperparameters: {hyperparams}")
+    agent = RLTrafficAgent(config=hyperparams)
     
     # Setup evaluation callback
     eval_callback = EvalCallback(
@@ -89,6 +93,18 @@ Examples:
     parser.add_argument('--eval-freq', type=int, default=10000,
                        help='Evaluation frequency in timesteps (default: 10000)')
     
+    # Hyperparameters
+    parser.add_argument('--learning-rate', type=float, default=3e-4,
+                       help='Learning rate (default: 0.0003)')
+    parser.add_argument('--n-steps', type=int, default=2048,
+                       help='Number of steps to run for each environment per update (default: 2048)')
+    parser.add_argument('--batch-size', type=int, default=64,
+                       help='Minibatch size (default: 64)')
+    parser.add_argument('--n-epochs', type=int, default=10,
+                       help='Number of epoch when optimizing the surrogate loss (default: 10)')
+    parser.add_argument('--gamma', type=float, default=0.99,
+                       help='Discount factor (default: 0.99)')
+    
     args = parser.parse_args()
     
     # Validate arguments
@@ -100,11 +116,22 @@ Examples:
         print("Error: eval-freq must be positive")
         return 1
     
+    # Construct hyperparams dict
+    hyperparams = {
+        'learning_rate': args.learning_rate,
+        'n_steps': args.n_steps,
+        'batch_size': args.batch_size,
+        'n_epochs': args.n_epochs,
+        'gamma': args.gamma,
+        'verbose': 1
+    }
+
     try:
         train_agent(
             timesteps=args.timesteps,
             save_path=args.save_path,
-            eval_freq=args.eval_freq
+            eval_freq=args.eval_freq,
+            hyperparams=hyperparams
         )
         return 0
     except KeyboardInterrupt:

@@ -65,6 +65,9 @@ Exemplos de uso:
     parser.add_argument('--rl-episodes', type=int, metavar='EPISODES', default=5,
                        help='Número de episódios para teste RL (padrão: 5)')
     
+    parser.add_argument('--rl-model', type=str, metavar='PATH',
+                       help='Caminho para o modelo RL a ser usado na simulação')
+    
     # Grid size options
     parser.add_argument('--rows', type=int, default=3, metavar='ROWS',
                        help='Número de linhas da grade de cruzamentos (padrão: 3)')
@@ -258,6 +261,10 @@ def main():
     # Determine heuristic and duration
     heuristica = CONFIG.HEURISTICA_ATIVA
     duracao = None
+    
+    # Update RL model path if provided
+    if args.rl_model:
+        CONFIG.RL_MODEL_PATH = args.rl_model
     
     if '--vertical-horizontal' in sys.argv:
         heuristica = TipoHeuristica.VERTICAL_HORIZONTAL

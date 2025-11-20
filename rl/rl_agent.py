@@ -109,6 +109,35 @@ class RLTrafficAgent:
         self.model_path = path
         print(f"Model loaded from {path}")
         
+        # Extract hyperparameters from loaded model
+        self._update_config_from_model()
+        
+    def _update_config_from_model(self):
+        """Update config with parameters from the loaded model."""
+        if self.model is None:
+            return
+
+        # Attributes to extract directly
+        attrs = ['n_steps', 'batch_size', 'n_epochs', 'gamma', 'gae_lambda', 
+                 'ent_coef', 'vf_coef', 'max_grad_norm']
+        
+        for attr in attrs:
+            if hasattr(self.model, attr):
+                self.config[attr] = getattr(self.model, attr)
+
+        # Handle schedule functions (learning_rate and clip_range)
+        for attr in ['learning_rate', 'clip_range']:
+            if hasattr(self.model, attr):
+                val = getattr(self.model, attr)
+                if callable(val):
+                    try:
+                        # Evaluate at progress_remaining=1.0 (start of training)
+                        self.config[attr] = float(val(1.0))
+                    except Exception:
+                        pass
+                else:
+                    self.config[attr] = val
+
     def evaluate(self, env: TrafficRLEnvironment, n_episodes: int = 5) -> Dict[str, float]:
         """Evaluate the model on the environment."""
         if self.model is None:

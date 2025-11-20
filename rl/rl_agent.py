@@ -105,7 +105,7 @@ class RLTrafficAgent:
         if not os.path.exists(path):
             raise FileNotFoundError(f"Model file not found: {path}")
             
-        self.model = PPO.load(path)
+        self.model = PPO.load(path, device='cpu')
         self.model_path = path
         print(f"Model loaded from {path}")
         

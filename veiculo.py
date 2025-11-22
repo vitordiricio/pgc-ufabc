@@ -128,40 +128,34 @@ class Veiculo:
 
     # ------------- colisão futura -------------
     def verificar_colisao_futura(self, todos_veiculos: List['Veiculo']) -> bool:
+        # OTIMIZAÇÃO: Checa apenas o veículo da frente já identificado (O(1))
+        # em vez de iterar sobre todos os veículos (O(N))
+        if not self.veiculo_frente or not self.veiculo_frente.ativo:
+            return False
+
         dx, dy = 0, 0
         if self.direcao == Direcao.NORTE:
             dy = self.velocidade + CONFIG.DISTANCIA_MIN_VEICULO / 2
         else:
             dx = self.velocidade + CONFIG.DISTANCIA_MIN_VEICULO / 2
+        
         posicao_futura = [self.posicao[0] + dx, self.posicao[1] + dy]
 
         if self.direcao == Direcao.NORTE:
             rect_futuro = pygame.Rect(
                 posicao_futura[0] - self.largura // 2,
                 posicao_futura[1] - self.altura // 2,
-                self.largura,
-                self.altura
+                self.largura, self.altura
             )
         else:
             rect_futuro = pygame.Rect(
                 posicao_futura[0] - self.altura // 2,
                 posicao_futura[1] - self.largura // 2,
-                self.altura,
-                self.largura
+                self.altura, self.largura
             )
 
-        for outro in todos_veiculos:
-            if outro.id == self.id or not outro.ativo:
-                continue
-            if self.direcao != outro.direcao:
-                # colisão cruzada é bloqueada pelo "gate" do cruzamento
-                continue
-            if not self._mesma_via_mesma_faixa(outro, getattr(self, "indice_faixa", 0)):
-                continue
-            rect_outro_expandido = outro.rect.inflate(10, 10)
-            if rect_futuro.colliderect(rect_outro_expandido):
-                return True
-        return False
+        rect_outro_expandido = self.veiculo_frente.rect.inflate(10, 10)
+        return rect_futuro.colliderect(rect_outro_expandido)
 
     # ------------- car-following + MOBIL-lite -------------
     def processar_todos_veiculos(self, todos_veiculos: List['Veiculo']) -> None:

@@ -1,0 +1,60 @@
+{
+  "simulacao": {
+    "heuristica": "REINFORCEMENT_LEARNING",
+    "duracao_solicitada": null,
+    "duracao_real": 420.01666666666665,
+    "inicio": "2025-11-21T17:16:51.178390",
+    "fim": "2025-11-21T17:16:51.178391",
+    "grade": "4x4",
+    "fps": 60,
+    "modo": "gui",
+    "engine": "ollama"
+  },
+  "metricas": {
+    "veiculos_concluidos": 844,
+    "tempo_viagem_medio": 69.72075434439178,
+    "tempo_parado_medio": 31.37973933649289,
+    "eficiencia_media": 54.99225498695852,
+    "score_heuristica": 26.71212443923117,
+    "velocidade_media_global_px_s": 0.3285312636051047,
+    "paradas_media_por_veiculo": 8.338862559241706,
+    "tempo_viagem_p50": 61.15,
+    "tempo_viagem_p95": 127.30416666666666,
+    "throughput_por_minuto": 120.56664418078648,
+    "veiculos_aguardando_instante": 94,
+    "velocidade_media_ativa": 0.6499205432187941,
+    "maior_fila_cruzamento_atual": 20,
+    "backlog_total_atual": 1521,
+    "backlog_max_total": 1521,
+    "backlog_gerado_total": 2547,
+    "backlog_despachado_total": 1026,
+    "backlog_medio": 726.1273758977818
+  },
+  "configuracao": {
+    "taxa_geracao": 0.012,
+    "velocidade_max": 1.0,
+    "fps_simulacao": 60,
+    "intervalo_metricas": 300,
+    "backlog": {
+      "ativo": true,
+      "limite_global": 10000,
+      "flush_por_frame": 3
+    },
+    "rl_config": {
+      "model_path": "rl/models/best.zip",
+      "hyperparameters": {
+        "learning_rate": 0.0001,
+        "n_steps": 4096,
+        "batch_size": 128,
+        "n_epochs": 20,
+        "gamma": 0.995,
+        "gae_lambda": 0.95,
+        "clip_range": 0.2,
+        "ent_coef": 0.0,
+        "vf_coef": 0.5,
+        "max_grad_norm": 0.5,
+        "verbose": 1
+      }
+    }
+  }
+}

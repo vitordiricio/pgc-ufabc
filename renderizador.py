@@ -40,6 +40,10 @@ class Renderizador:
 
         self._sprite_cache = {}  # (direcao, cor) -> Surface
         self._painel_cache = None
+        
+        # CACHES ADICIONAIS
+        self._painel_superior_cache = None
+        self._controles_cache = None
 
     @staticmethod
     def _linha_tracejada(surface, cor, start_pos, end_pos, dash_length=14, gap_length=10, width=2):
@@ -123,17 +127,24 @@ class Renderizador:
         self.relogio.tick(CONFIG.FPS)
 
     def _desenhar_painel_superior(self, malha: MalhaViaria) -> None:
-        altura_painel = 60
-        pygame.draw.rect(self.tela, (30, 30, 40), (0, 0, CONFIG.LARGURA_TELA, altura_painel))
-        pygame.draw.line(self.tela, CONFIG.CINZA, (0, altura_painel), (CONFIG.LARGURA_TELA, altura_painel), 2)
-        titulo = "SIMULAÇÃO DE TRÁFEGO URBANO"
-        superficie_titulo = self.fontes['titulo'].render(titulo, True, CONFIG.BRANCO)
-        rect_titulo = superficie_titulo.get_rect(center=(CONFIG.LARGURA_TELA // 2, 20))
-        self.tela.blit(superficie_titulo, rect_titulo)
-        subtitulo = "Projeto de Graduação em Computação - UFABC"
-        superficie_subtitulo = self.fontes['pequena'].render(subtitulo, True, CONFIG.CINZA_CLARO)
-        rect_subtitulo = superficie_subtitulo.get_rect(center=(CONFIG.LARGURA_TELA // 2, 40))
-        self.tela.blit(superficie_subtitulo, rect_subtitulo)
+        if self._painel_superior_cache is None:
+            altura_painel = 60
+            self._painel_superior_cache = pygame.Surface((CONFIG.LARGURA_TELA, altura_painel))
+            # Desenha no cache
+            pygame.draw.rect(self._painel_superior_cache, (30, 30, 40), (0, 0, CONFIG.LARGURA_TELA, altura_painel))
+            pygame.draw.line(self._painel_superior_cache, CONFIG.CINZA, (0, altura_painel), (CONFIG.LARGURA_TELA, altura_painel), 2)
+            
+            titulo = "SIMULAÇÃO DE TRÁFEGO URBANO"
+            superficie_titulo = self.fontes['titulo'].render(titulo, True, CONFIG.BRANCO)
+            rect_titulo = superficie_titulo.get_rect(center=(CONFIG.LARGURA_TELA // 2, 20))
+            self._painel_superior_cache.blit(superficie_titulo, rect_titulo)
+            
+            subtitulo = "Projeto de Graduação em Computação - UFABC"
+            superficie_subtitulo = self.fontes['pequena'].render(subtitulo, True, CONFIG.CINZA_CLARO)
+            rect_subtitulo = superficie_subtitulo.get_rect(center=(CONFIG.LARGURA_TELA // 2, 40))
+            self._painel_superior_cache.blit(superficie_subtitulo, rect_subtitulo)
+
+        self.tela.blit(self._painel_superior_cache, (0, 0))
 
     def _desenhar_painel_lateral(self, malha: MalhaViaria, info_simulacao: Dict) -> None:
         largura_painel = 300
@@ -219,36 +230,37 @@ class Renderizador:
         x_painel = 20
         y_painel = CONFIG.ALTURA_TELA - altura_painel - 20
 
-        superficie_painel = pygame.Surface((largura_painel, altura_painel))
-        superficie_painel.set_alpha(200)
-        superficie_painel.fill((40, 40, 50))
-        pygame.draw.rect(superficie_painel, CONFIG.CINZA, superficie_painel.get_rect(), 2)
+        if self._controles_cache is None:
+            self._controles_cache = pygame.Surface((largura_painel, altura_painel))
+            self._controles_cache.set_alpha(200)
+            self._controles_cache.fill((40, 40, 50))
+            pygame.draw.rect(self._controles_cache, CONFIG.CINZA, self._controles_cache.get_rect(), 2)
 
-        y_texto = 10
-        titulo = "CONTROLES"
-        superficie_titulo = self.fontes['media'].render(titulo, True, CONFIG.BRANCO)
-        rect_titulo = superficie_titulo.get_rect(centerx=largura_painel // 2, y=y_texto)
-        superficie_painel.blit(superficie_titulo, rect_titulo)
+            y_texto = 10
+            titulo = "CONTROLES"
+            superficie_titulo = self.fontes['media'].render(titulo, True, CONFIG.BRANCO)
+            rect_titulo = superficie_titulo.get_rect(centerx=largura_painel // 2, y=y_texto)
+            self._controles_cache.blit(superficie_titulo, rect_titulo)
 
-        y_texto = 35
-        controles = [
-            ("ESC", "Sair da simulação"),
-            ("ESPAÇO", "Pausar/Continuar"),
-            ("R", "Reiniciar simulação"),
-            ("+/-", "Ajustar velocidade"),
-            ("N", "Avançar fase manual (todos)"),
-            ("Clique", "Alternar semáforo sob o mouse (Manual)"),
-            ("TAB", "Alternar estatísticas")
-        ]
+            y_texto = 35
+            controles = [
+                ("ESC", "Sair da simulação"),
+                ("ESPAÇO", "Pausar/Continuar"),
+                ("R", "Reiniciar simulação"),
+                ("+/-", "Ajustar velocidade"),
+                ("N", "Avançar fase manual (todos)"),
+                ("Clique", "Alternar semáforo sob o mouse (Manual)"),
+                ("TAB", "Alternar estatísticas")
+            ]
 
-        for tecla, descricao in controles:
-            superficie_tecla = self.fontes['pequena'].render(tecla, True, CONFIG.AMARELO)
-            superficie_painel.blit(superficie_tecla, (20, y_texto))
-            superficie_desc = self.fontes['pequena'].render(descricao, True, CONFIG.BRANCO)
-            superficie_painel.blit(superficie_desc, (80, y_texto))
-            y_texto += 18
+            for tecla, descricao in controles:
+                superficie_tecla = self.fontes['pequena'].render(tecla, True, CONFIG.AMARELO)
+                self._controles_cache.blit(superficie_tecla, (20, y_texto))
+                superficie_desc = self.fontes['pequena'].render(descricao, True, CONFIG.BRANCO)
+                self._controles_cache.blit(superficie_desc, (80, y_texto))
+                y_texto += 18
 
-        self.tela.blit(superficie_painel, (x_painel, y_painel))
+        self.tela.blit(self._controles_cache, (x_painel, y_painel))
 
     # ========================================
     # RENDERIZAÇÃO DE MALHA VIÁRIA (com cache)

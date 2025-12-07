@@ -1,30 +1,39 @@
-"""ltiplas heu
-Módulo principal de simulação com suporte a múrísticas e análise de desempenho.
+"""
+Módulo principal de simulação com suporte a múltiplas heurísticas e análise de desempenho.
 """
 import pygame
 import json
 import os
+import time
+import queue
 from datetime import datetime
 from typing import Dict
 from configuracao import CONFIG, TipoHeuristica, Direcao, EstadoSemaforo
 from cruzamento import MalhaViaria
 from renderizador import Renderizador
+from llm_manager import LLMWorker
 
 
 class GerenciadorMetricas:
     """Gerencia a coleta e análise de métricas da simulação."""
-    
+
     def __init__(self):
-        """Inicializa o gerenciador de métricas."""
         self.metricas_por_heuristica = {
             heuristica: {
                 'tempo_viagem': [],
                 'tempo_parado': [],
                 'veiculos_processados': 0,
-                'eficiencia': []
+                'eficiencia': [],
+                # Séries adicionais
+                'throughput_por_minuto': [],
+                'paradas_media_por_veiculo': [],
+                'tempo_viagem_p95': [],
+                # Backlog
+                'backlog_medio': [],
+                'backlog_max': []
             } for heuristica in TipoHeuristica
         }
-        
+
         self.sessao_atual = {
             'inicio': datetime.now(),
             'heuristica_atual': None,
@@ -33,65 +42,97 @@ class GerenciadorMetricas:
 
     def calcular_score(self, heuristica: TipoHeuristica) -> float:
         """
-        Calcula um score normalizado para uma heurística, combinando:
-          - Tempo de viagem médio (peso 50%)
-          - Tempo parado médio   (peso 30%)
-          - Throughput           (peso 20%)
-        Score final entre 0 e 100 (quanto maior, melhor).
+        Score composto com normalizações suaves:
+          - tm_norm = 1 / (1 + tm)
+          - tp_norm = 1 / (1 + tp)
+          - th_norm = min(1, th/60)
+          - bk_norm = 1 / (1 + backlog_medio)  (penaliza backlog alto)
+
+        Pesos:
+          tm 40%, tp 25%, th 25%, backlog 10%.
         """
         m = self.metricas_por_heuristica[heuristica]
-        if not m['tempo_viagem'] or not m['veiculos_processados']:
+        if not m['tempo_viagem'] or not m['throughput_por_minuto']:
             return 0.0
 
-        # Médias históricas
         tm = sum(m['tempo_viagem']) / len(m['tempo_viagem'])
         tp = sum(m['tempo_parado']) / len(m['tempo_parado'])
-        v  = m['veiculos_processados']
+        th = sum(m['throughput_por_minuto']) / len(m['throughput_por_minuto'])
+        bk = (sum(m['backlog_medio']) / len(m['backlog_medio'])) if m['backlog_medio'] else 0.0
 
-        # Normalizações (você pode ajustar maximos esperados)
-        tm_norm = max(0, min(1, 1 - tm / 10))       # assume 10s como pior caso
-        tp_norm = max(0, min(1, 1 - tp / 5))        # assume 5s como pior caso
-        v_norm  = max(0, min(1, v / 200))           # assume 200 veículos como alto throughput
+        tm_norm = 1.0 / (1.0 + max(0.0, tm))
+        tp_norm = 1.0 / (1.0 + max(0.0, tp))
+        th_norm = min(1.0, max(0.0, th) / 60.0)
+        bk_norm = 1.0 / (1.0 + max(0.0, bk))
 
-        score = (0.5 * tm_norm + 0.3 * tp_norm + 0.2 * v_norm) * 100
+        score = (0.40 * tm_norm + 0.25 * tp_norm + 0.25 * th_norm + 0.10 * bk_norm) * 100.0
         return score
-    
+
     def registrar_metricas(self, estatisticas: Dict, heuristica: TipoHeuristica) -> None:
-        """Registra métricas para análise posterior."""
-        if estatisticas['veiculos_concluidos'] > 0:
+        if estatisticas['veiculos_concluidos'] >= 0:
             metricas = self.metricas_por_heuristica[heuristica]
-            
-            metricas['tempo_viagem'].append(estatisticas['tempo_viagem_medio'])
-            metricas['tempo_parado'].append(estatisticas['tempo_parado_medio'])
+            # tempos médios (apenas quando houver base)
+            if estatisticas['veiculos_concluidos'] > 0:
+                metricas['tempo_viagem'].append(estatisticas['tempo_viagem_medio'])
+                metricas['tempo_parado'].append(estatisticas['tempo_parado_medio'])
+                if estatisticas['tempo_viagem_medio'] > 0:
+                    eficiencia = ((estatisticas['tempo_viagem_medio'] - estatisticas['tempo_parado_medio']) /
+                                  estatisticas['tempo_viagem_medio']) * 100
+                    metricas['eficiencia'].append(eficiencia)
             metricas['veiculos_processados'] = estatisticas['veiculos_concluidos']
-            
-            # Calcula eficiência
-            if estatisticas['tempo_viagem_medio'] > 0:
-                eficiencia = ((estatisticas['tempo_viagem_medio'] - estatisticas['tempo_parado_medio']) / 
-                            estatisticas['tempo_viagem_medio']) * 100
-                metricas['eficiencia'].append(eficiencia)
-    
+
+            # séries comparativas novas (se existirem nas estatísticas)
+            metricas['throughput_por_minuto'].append(estatisticas.get('throughput_por_minuto', 0.0))
+            metricas['paradas_media_por_veiculo'].append(estatisticas.get('paradas_media_por_veiculo', 0.0))
+            metricas['tempo_viagem_p95'].append(estatisticas.get('tempo_viagem_p95', 0.0))
+
+            # backlog
+            metricas['backlog_medio'].append(estatisticas.get('backlog_medio', 0.0))
+            metricas['backlog_max'].append(estatisticas.get('backlog_max', 0.0))
+
     def obter_comparacao(self) -> Dict:
-        """Retorna comparação entre heurísticas."""
         comparacao = {}
-        
         for heuristica, metricas in self.metricas_por_heuristica.items():
-            if metricas['tempo_viagem']:
+            if metricas['tempo_viagem'] or metricas['throughput_por_minuto']:
                 comparacao[heuristica.name] = {
-                    'tempo_viagem_medio': sum(metricas['tempo_viagem']) / len(metricas['tempo_viagem']),
-                    'tempo_parado_medio': sum(metricas['tempo_parado']) / len(metricas['tempo_parado']),
-                    'eficiencia_media': sum(metricas['eficiencia']) / len(metricas['eficiencia']) if metricas['eficiencia'] else 0,
-                    'veiculos_processados': metricas['veiculos_processados']
+                    'tempo_viagem_medio': sum(metricas['tempo_viagem']) / len(metricas['tempo_viagem'])
+                    if metricas['tempo_viagem'] else 0.0,
+                    'tempo_parado_medio': sum(metricas['tempo_parado']) / len(metricas['tempo_parado'])
+                    if metricas['tempo_parado'] else 0.0,
+                    'eficiencia_media': sum(metricas['eficiencia']) / len(metricas['eficiencia'])
+                    if metricas['eficiencia'] else 0.0,
+                    'veiculos_processados': metricas['veiculos_processados'],
+                    'throughput_medio_por_minuto': (
+                        sum(metricas['throughput_por_minuto']) / len(metricas['throughput_por_minuto'])
+                        if metricas['throughput_por_minuto'] else 0.0
+                    ),
+                    'paradas_medias_por_veiculo': (
+                        sum(metricas['paradas_media_por_veiculo']) / len(metricas['paradas_media_por_veiculo'])
+                        if metricas['paradas_media_por_veiculo'] else 0.0
+                    ),
+                    'tempo_viagem_p95_medio': (
+                        sum(metricas['tempo_viagem_p95']) / len(metricas['tempo_viagem_p95'])
+                        if metricas['tempo_viagem_p95'] else 0.0
+                    ),
+                    'backlog_medio': (
+                        sum(metricas['backlog_medio']) / len(metricas['backlog_medio'])
+                        if metricas['backlog_medio'] else 0.0
+                    ),
+                    'backlog_max_medio': (
+                        sum(metricas['backlog_max']) / len(metricas['backlog_max'])
+                        if metricas['backlog_max'] else 0.0
+                    )
                 }
-        
         return comparacao
-    
-    def salvar_relatorio(self, nome_arquivo: str = None) -> str:
-        """Salva relatório de métricas em arquivo."""
+
+    def salvar_relatorio(self, nome_arquivo: str = None, estatisticas_finais: Dict = None,
+                        linhas: int = None, colunas: int = None) -> str:
         if nome_arquivo is None:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             nome_arquivo = f"relatorio_simulacao_{timestamp}.json"
-        
+
+        estat_final = estatisticas_finais or {}
+
         relatorio = {
             'sessao': {
                 'inicio': self.sessao_atual['inicio'].isoformat(),
@@ -103,56 +144,69 @@ class GerenciadorMetricas:
                 for h in self.metricas_por_heuristica
             },
             'comparacao_heuristicas': self.obter_comparacao(),
+            'estatisticas_finais': estat_final,
             'configuracoes': {
-                'grade': f"{CONFIG.LINHAS_GRADE}x{CONFIG.COLUNAS_GRADE}",
+                'grade': f"{linhas or CONFIG.LINHAS_GRADE}x{colunas or CONFIG.COLUNAS_GRADE}",
                 'taxa_geracao': CONFIG.TAXA_GERACAO_VEICULO,
                 'velocidade_max': CONFIG.VELOCIDADE_MAX_VEICULO
             }
         }
-        
-        # Criar diretório se não existir
+
         os.makedirs('relatorios', exist_ok=True)
         caminho_completo = os.path.join('relatorios', nome_arquivo)
-        
         with open(caminho_completo, 'w', encoding='utf-8') as f:
             json.dump(relatorio, f, indent=2, ensure_ascii=False)
-        
         return caminho_completo
 
 
 class Simulacao:
     """Classe principal que coordena toda a simulação de tráfego."""
-    
-    def __init__(self, linhas: int = CONFIG.LINHAS_GRADE, colunas: int = CONFIG.COLUNAS_GRADE):
-        """
-        Inicializa a simulação.
-        
-        Args:
-            linhas: Número de linhas de cruzamentos
-            colunas: Número de colunas de cruzamentos
-        """
-        self.malha = MalhaViaria(linhas, colunas)
-        self.renderizador = Renderizador()
+
+    def __init__(self, heuristica: TipoHeuristica = None, use_gui: bool = True,
+                 duracao_segundos: int = None, nome_arquivo: str = None,
+                 verbose: bool = False, linhas: int = CONFIG.LINHAS_GRADE,
+                 colunas: int = CONFIG.COLUNAS_GRADE, engine: str = 'ollama'):
+        self.linhas = linhas
+        self.colunas = colunas
+        self.use_gui = use_gui
+        self.heuristica_atual = heuristica or CONFIG.HEURISTICA_ATIVA
+        self.duracao_segundos = duracao_segundos
+        self.nome_arquivo = nome_arquivo
+        self.verbose = verbose
+        self.engine = engine
+
+        # LLM Worker Thread setup
+        self.llm_request_queue = queue.Queue()
+        self.llm_response_queue = queue.Queue()
+        if self.heuristica_atual == TipoHeuristica.LLM_HEURISTICA:
+            self.llm_worker = LLMWorker(self.llm_request_queue, self.llm_response_queue, self.engine)
+            self.llm_worker.start()
+        else:
+            self.llm_worker = None
+
+        self.malha = MalhaViaria(
+            linhas, colunas, engine,
+            request_queue=self.llm_request_queue,
+            response_queue=self.llm_response_queue
+        )
         self.gerenciador_metricas = GerenciadorMetricas()
-        
-        # Estados da simulação
+
+        # Initialize renderer (always active now)
+        self.renderizador = Renderizador()
         self.rodando = True
         self.pausado = False
+        self.awaiting_llm_response = False # New state for pausing simulation
         self.mostrar_estatisticas = True
-        
-        # Controle de velocidade
         self.multiplicador_velocidade = 1.0
         self.tempo_acumulado = 0.0
-        
-        # Controle de heurísticas
-        self.heuristica_atual = CONFIG.HEURISTICA_ATIVA
         self.tempo_por_heuristica = {}
         self.inicio_heuristica = pygame.time.get_ticks()
-        
-        # Mensagens temporárias
         self.mensagem_temporaria = None
         self.tempo_mensagem = 0
-    
+
+        # Set the heuristic for the simulation
+        self.malha.mudar_heuristica(self.heuristica_atual, self.engine)
+
     def processar_eventos(self) -> None:
         for evento in pygame.event.get():
             if evento.type == pygame.QUIT:
@@ -163,207 +217,258 @@ class Simulacao:
                 self._processar_clique(evento.pos)
 
     def _processar_clique(self, pos) -> None:
-        """
-        Clique esquerdo alterna o semáforo sob o mouse quando em modo MANUAL.
-        Mostra mensagem do novo estado ou dica para ativar modo manual.
-        """
         resultado = self.malha.gerenciador_semaforos.clique_em(pos)
         if resultado:
             (cid, direcao, estado) = resultado
             nome_dir = "NORTE" if direcao == Direcao.NORTE else "LESTE"
-            nome_est = {EstadoSemaforo.VERDE:"VERDE", EstadoSemaforo.AMARELO:"AMARELO", EstadoSemaforo.VERMELHO:"VERMELHO"}[estado]
+            nome_est = {EstadoSemaforo.VERDE: "VERDE", EstadoSemaforo.AMARELO: "AMARELO", EstadoSemaforo.VERMELHO: "VERMELHO"}[estado]
             self._mostrar_mensagem(f"Cruz {cid} • {nome_dir}: {nome_est}")
         else:
             if self.heuristica_atual != TipoHeuristica.MANUAL:
-                self._mostrar_mensagem("Ative o modo Manual (tecla 5) para controlar por clique")
+                self._mostrar_mensagem("Ative o modo Manual (tecla 4) para controlar por clique")
 
-    
     def _processar_tecla(self, evento: pygame.event.Event) -> None:
-        """Processa eventos de teclado."""
-        # Sair da simulação
         if evento.key == pygame.K_ESCAPE:
             self._finalizar_simulacao()
-
-        # Pausar / continuar
         elif evento.key == pygame.K_SPACE:
             self.pausado = not self.pausado
             estado = "Pausado" if self.pausado else "Executando"
             self._mostrar_mensagem(f"Simulação {estado}")
-
-        # Reiniciar
         elif evento.key == pygame.K_r:
             self._reiniciar()
-
-        # Alternar exibição de estatísticas
         elif evento.key == pygame.K_TAB:
             self.mostrar_estatisticas = not self.mostrar_estatisticas
-
-        # Aumentar velocidade
         elif evento.key in [pygame.K_PLUS, pygame.K_EQUALS, pygame.K_KP_PLUS]:
             self.multiplicador_velocidade = min(4.0, self.multiplicador_velocidade + 0.5)
             self._mostrar_mensagem(f"Velocidade: {self.multiplicador_velocidade}x")
-
-        # Diminuir velocidade
         elif evento.key in [pygame.K_MINUS, pygame.K_KP_MINUS]:
             self.multiplicador_velocidade = max(0.5, self.multiplicador_velocidade - 0.5)
             self._mostrar_mensagem(f"Velocidade: {self.multiplicador_velocidade}x")
-
-        # Heurísticas automáticas
-        elif evento.key == pygame.K_1:
-            self._mudar_heuristica(TipoHeuristica.TEMPO_FIXO)
-        elif evento.key == pygame.K_2:
-            self._mudar_heuristica(TipoHeuristica.ADAPTATIVA_SIMPLES)
-        elif evento.key == pygame.K_3:
-            self._mudar_heuristica(TipoHeuristica.ADAPTATIVA_DENSIDADE)
-        elif evento.key == pygame.K_4:
-            self._mudar_heuristica(TipoHeuristica.WAVE_GREEN)
-
-        # Ativar Modo Manual
-        elif evento.key == pygame.K_5:
-            self._mudar_heuristica(TipoHeuristica.MANUAL)
-
-        # Avançar fase de semáforos em Modo Manual
         elif evento.key == pygame.K_n and self.heuristica_atual == TipoHeuristica.MANUAL:
             self.malha.gerenciador_semaforos.avancar_manual()
             self._mostrar_mensagem("Manual: semáforos avançados")
 
-        # Salvar relatório (Ctrl+S)
-        elif evento.key == pygame.K_s and (evento.mod & pygame.KMOD_CTRL):
-            self._salvar_relatorio()
-    
-    def _mudar_heuristica(self, nova_heuristica: TipoHeuristica) -> None:
-        """Muda a heurística de controle."""
-        if nova_heuristica != self.heuristica_atual:
-            # Registra tempo da heurística anterior
-            tempo_atual = pygame.time.get_ticks()
-            tempo_decorrido = (tempo_atual - self.inicio_heuristica) / 1000
 
-            if self.heuristica_atual not in self.tempo_por_heuristica:
-                self.tempo_por_heuristica[self.heuristica_atual] = 0
-            self.tempo_por_heuristica[self.heuristica_atual] += tempo_decorrido
-
-            # Muda para nova heurística no modelo
-            self.heuristica_atual = nova_heuristica
-            self.malha.mudar_heuristica(nova_heuristica)
-            self.inicio_heuristica = tempo_atual
-
-            # Mapear nomes (incluindo Manual)
-            nomes = {
-                TipoHeuristica.TEMPO_FIXO: "Tempo Fixo",
-                TipoHeuristica.ADAPTATIVA_SIMPLES: "Adaptativa Simples",
-                TipoHeuristica.ADAPTATIVA_DENSIDADE: "Adaptativa por Densidade",
-                TipoHeuristica.WAVE_GREEN: "Onda Verde",
-                TipoHeuristica.MANUAL: "Manual"
-            }
-            nome_heuristica = nomes.get(nova_heuristica, "Desconhecida")
-
-            self._mostrar_mensagem(f"Heurística: {nome_heuristica}")
-
-    
     def _reiniciar(self) -> None:
-        """Reinicia a simulação."""
-        # Salva métricas antes de reiniciar
         self._coletar_metricas()
-        
-        # Reinicia componentes
-        self.malha = MalhaViaria(CONFIG.LINHAS_GRADE, CONFIG.COLUNAS_GRADE)
+        self.malha = MalhaViaria(self.linhas, self.colunas, self.engine)
+        self.malha.mudar_heuristica(self.heuristica_atual, self.engine)
         self.pausado = False
         self.multiplicador_velocidade = 1.0
         self.tempo_acumulado = 0.0
-        
         self._mostrar_mensagem("Simulação Reiniciada")
-    
+
     def _mostrar_mensagem(self, mensagem: str) -> None:
-        """Mostra uma mensagem temporária."""
         self.mensagem_temporaria = mensagem
         self.tempo_mensagem = pygame.time.get_ticks()
-    
-    def _salvar_relatorio(self) -> None:
-        """Salva relatório de métricas."""
-        try:
-            caminho = self.gerenciador_metricas.salvar_relatorio()
-            self._mostrar_mensagem(f"Relatório salvo: {os.path.basename(caminho)}")
-        except Exception as e:
-            self._mostrar_mensagem(f"Erro ao salvar: {str(e)}")
-    
+
+
     def _finalizar_simulacao(self) -> None:
-        """Finaliza a simulação e salva métricas."""
         self._coletar_metricas()
-        
-        # Pergunta se deseja salvar relatório
         print("\nSimulação finalizada!")
-        print("Comparação de heurísticas:")
-        comparacao = self.gerenciador_metricas.obter_comparacao()
-        
-        for heuristica, dados in comparacao.items():
-            print(f"\n{heuristica}:")
-            print(f"  - Tempo médio de viagem: {dados['tempo_viagem_medio']:.2f}s")
-            print(f"  - Tempo médio parado: {dados['tempo_parado_medio']:.2f}s")
-            print(f"  - Eficiência média: {dados['eficiencia_media']:.1f}%")
-        
+
+        # Auto-save report for GUI mode
+        self._gerar_relatorio_gui()
+
+        # Stop the LLM worker thread
+        if self.llm_worker:
+            self.llm_request_queue.put((None, None)) # Sentinel to stop the worker
+            self.llm_worker.join(timeout=2) # Wait for the worker to finish
+
         self.rodando = False
-    
+
+    def _gerar_relatorio_gui(self) -> None:
+        """Generate and save report for GUI mode using headless pattern."""
+        try:
+            estatisticas = self.malha.obter_estatisticas()
+
+            # Calculate duration (approximate from simulation time)
+            duracao_real = self.malha.metricas['tempo_simulacao'] / CONFIG.FPS
+
+            # Generate filename using headless pattern
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            nome_arquivo = f"relatorio_{self.heuristica_atual.name.lower()}_{timestamp}.json"
+
+            # Use unified report generation
+            self._gerar_relatorio_unificado(
+                estatisticas=estatisticas,
+                duracao_real=duracao_real,
+                duracao_solicitada=None,
+                tempo_inicio=datetime.now(),
+                tempo_fim=datetime.now(),
+                nome_arquivo=nome_arquivo,
+                modo='gui'
+            )
+
+            print(f"Relatório salvo automaticamente: {nome_arquivo}")
+
+        except Exception as e:
+            print(f"Erro ao salvar relatório: {str(e)}")
+
     def _coletar_metricas(self) -> None:
-        """Coleta métricas atuais."""
         estatisticas = self.malha.obter_estatisticas()
         self.gerenciador_metricas.registrar_metricas(estatisticas, self.heuristica_atual)
-    
+
     def atualizar(self, dt: float) -> None:
-        """
-        Atualiza a simulação.
-        
-        Args:
-            dt: Delta time em segundos
-        """
-        if self.pausado:
+        if self.pausado or self.awaiting_llm_response:
+            # If paused by user or waiting for LLM, do not update simulation state
             return
-        
-        # Aplica multiplicador de velocidade
+
         self.tempo_acumulado += dt * self.multiplicador_velocidade
-        
-        # Atualiza a simulação em passos discretos
         while self.tempo_acumulado >= 1.0 / CONFIG.FPS:
-            self.malha.atualizar()
+            # Malha.atualizar now returns a boolean indicating if it's waiting for LLM
+            is_waiting = self.malha.atualizar()
+            if is_waiting:
+                self.awaiting_llm_response = True
+                self._mostrar_mensagem("Aguardando decisão da Inteligência Artificial...")
+                break  # Exit the update loop to pause simulation time
+
             self.tempo_acumulado -= 1.0 / CONFIG.FPS
-            
-            # Coleta métricas periodicamente
             if self.malha.metricas['tempo_simulacao'] % CONFIG.INTERVALO_METRICAS == 0:
                 self._coletar_metricas()
-    
+
     def renderizar(self) -> None:
-        """Renderiza a simulação."""
-        # Prepara informações para renderização
+        estado_str = 'Executando'
+        if self.pausado:
+            estado_str = 'Pausado'
+        elif self.awaiting_llm_response:
+            estado_str = 'Aguardando LLM'
+
         info_simulacao = {
             'velocidade': self.multiplicador_velocidade,
-            'estado': 'Pausado' if self.pausado else 'Executando',
+            'estado': estado_str,
             'fps': self.renderizador.obter_fps(),
             'score': self.gerenciador_metricas.calcular_score(self.heuristica_atual)
         }
-        
-        # Renderiza a malha
         self.renderizador.renderizar(self.malha, info_simulacao)
-        
-        # Renderiza mensagem temporária se houver
         if self.mensagem_temporaria:
             tempo_decorrido = pygame.time.get_ticks() - self.tempo_mensagem
-            if tempo_decorrido < 2000:  # Mostra por 2 segundos
+            if tempo_decorrido < 2000:
                 self.renderizador.desenhar_mensagem(self.mensagem_temporaria)
             else:
                 self.mensagem_temporaria = None
-    
-    def executar(self) -> None:
-        """Loop principal da simulação."""
+
+    def _executar_gui(self) -> None:
+        """Execute simulation in GUI mode."""
         clock = pygame.time.Clock()
-        
         print("Simulação de Tráfego Urbano iniciada!")
         print("Pressione F1 para ajuda com os controles.")
-        
         while self.rodando:
-            dt = clock.tick(CONFIG.FPS) / 1000.0  # Delta time em segundos
+            dt = clock.tick(CONFIG.FPS) / 1000.0
             
             self.processar_eventos()
+            
+            # Non-blocking check for LLM response
+            try:
+                llm_decision = self.llm_response_queue.get_nowait()
+                if llm_decision:
+                    # Apply decision and unpause
+                    print("🤖 Decisão do LLM recebida e aplicada.")
+                    self.malha.gerenciador_semaforos.heuristica.ultima_decisao = llm_decision
+                else:
+                    print(f"⚠️ LLM retornou uma decisão inválida ou um erro. Valor recebido da fila: {llm_decision!r}")
+                
+                self.awaiting_llm_response = False
+                self.mensagem_temporaria = None # Clear "waiting" message
+            except queue.Empty:
+                pass # No response yet, continue as normal
+
             self.atualizar(dt)
             self.renderizar()
-        
+            
+            # Check for duration limit if specified
+            if self.duracao_segundos is not None:
+                simulation_time_frames = self.malha.metricas.get('tempo_simulacao', 0)
+                simulation_time_seconds = simulation_time_frames / CONFIG.FPS
+                if simulation_time_seconds >= self.duracao_segundos:
+                    print(f"\nTempo de simulação ({self.duracao_segundos}s) atingido.")
+                    self._finalizar_simulacao()
+
+        # Cleanup worker thread on exit
+        if self.llm_worker:
+            self.llm_request_queue.put((None, None))
+            self.llm_worker.join(timeout=2)
+
         print("\nSimulação encerrada.")
         pygame.quit()
+
+    def executar(self) -> None:
+        self._executar_gui()
+
+    def _gerar_relatorio_unificado(self, estatisticas: dict, duracao_real: float,
+                                  duracao_solicitada: int, tempo_inicio: datetime,
+                                  tempo_fim: datetime, nome_arquivo: str, modo: str) -> str:
+        """Unified report generation for both GUI and headless modes."""
+        relatorio = {
+            'simulacao': {
+                'heuristica': self.heuristica_atual.name,
+                'duracao_solicitada': duracao_solicitada,
+                'duracao_real': duracao_real,
+                'inicio': tempo_inicio.isoformat(),
+                'fim': tempo_fim.isoformat(),
+                'grade': f"{self.linhas}x{self.colunas}",
+                'fps': CONFIG.FPS,
+                'modo': modo,
+                'engine': self.engine
+            },
+            'metricas': {
+                'veiculos_concluidos': estatisticas['veiculos_concluidos'],
+                'tempo_viagem_medio': estatisticas['tempo_viagem_medio'],
+                'tempo_parado_medio': estatisticas['tempo_parado_medio'],
+                'eficiencia_media': self._calcular_eficiencia(estatisticas),
+                'score_heuristica': self.gerenciador_metricas.calcular_score(self.heuristica_atual),
+                # extras (se presentes)
+                'velocidade_media_global_px_s': estatisticas.get('velocidade_media_global', 0.0),
+                'paradas_media_por_veiculo': estatisticas.get('paradas_media_por_veiculo', 0.0),
+                'tempo_viagem_p50': estatisticas.get('tempo_viagem_p50', 0.0),
+                'tempo_viagem_p95': estatisticas.get('tempo_viagem_p95', 0.0),
+                'throughput_por_minuto': estatisticas.get('throughput_por_minuto', 0.0),
+                'veiculos_aguardando_instante': estatisticas.get('veiculos_aguardando', 0),
+                'velocidade_media_ativa': estatisticas.get('velocidade_media_ativa', 0.0),
+                'maior_fila_cruzamento_atual': estatisticas.get('maior_fila_cruzamento_atual', 0),
+                # backlog
+                'backlog_total_atual': estatisticas.get('backlog_total', 0),
+                'backlog_max_total': estatisticas.get('backlog_max', 0),
+                'backlog_gerado_total': estatisticas.get('backlog_gerado_total', 0),
+                'backlog_despachado_total': estatisticas.get('backlog_despachado_total', 0),
+                'backlog_medio': estatisticas.get('backlog_medio', 0.0),
+            },
+            'configuracao': {
+                'taxa_geracao': CONFIG.TAXA_GERACAO_VEICULO,
+                'velocidade_max': CONFIG.VELOCIDADE_MAX_VEICULO,
+                'fps_simulacao': CONFIG.FPS,
+                'intervalo_metricas': CONFIG.INTERVALO_METRICAS,
+                'backlog': {
+                    'ativo': CONFIG.BACKLOG_ATIVO,
+                    'limite_global': CONFIG.BACKLOG_TAMANHO_MAX,
+                    'flush_por_frame': CONFIG.BACKLOG_FLUSH_MAX_POR_FRAME
+                }
+            }
+        }
+
+        # Add RL configuration if applicable
+        if self.heuristica_atual == TipoHeuristica.REINFORCEMENT_LEARNING:
+            try:
+                heuristica_instance = self.malha.gerenciador_semaforos.heuristica
+                if hasattr(heuristica_instance, 'agent') and heuristica_instance.agent:
+                    relatorio['configuracao']['rl_config'] = {
+                        'model_path': getattr(heuristica_instance.agent, 'model_path', 'unknown'),
+                        'hyperparameters': getattr(heuristica_instance.agent, 'config', {})
+                    }
+            except Exception as e:
+                print(f"Warning: Could not extract RL config for report: {e}")
+
+        os.makedirs('relatorios', exist_ok=True)
+        caminho_completo = os.path.join('relatorios', nome_arquivo)
+        with open(caminho_completo, 'w', encoding='utf-8') as f:
+            json.dump(relatorio, f, indent=2, ensure_ascii=False)
+
+        return caminho_completo
+
+    def _calcular_eficiencia(self, estatisticas: dict) -> float:
+        if estatisticas['tempo_viagem_medio'] > 0:
+            return ((estatisticas['tempo_viagem_medio'] - estatisticas['tempo_parado_medio']) /
+                   estatisticas['tempo_viagem_medio']) * 100
+        return 0.0
+
+

@@ -1,0 +1,44 @@
+{
+  "simulacao": {
+    "heuristica": "RANDOM_OPEN_CLOSE",
+    "duracao_solicitada": null,
+    "duracao_real": 300.0,
+    "inicio": "2025-11-21T10:17:23.868481",
+    "fim": "2025-11-21T10:17:23.868482",
+    "grade": "3x3",
+    "fps": 60,
+    "modo": "gui",
+    "engine": "ollama"
+  },
+  "metricas": {
+    "veiculos_concluidos": 498,
+    "tempo_viagem_medio": 61.08172690763052,
+    "tempo_parado_medio": 22.651305220883536,
+    "eficiencia_media": 62.91639682169191,
+    "score_heuristica": 27.299128311452325,
+    "velocidade_media_global_px_s": 0.4067265865715626,
+    "paradas_media_por_veiculo": 8.937751004016064,
+    "tempo_viagem_p50": 60.766666666666666,
+    "tempo_viagem_p95": 90.33833333333332,
+    "throughput_por_minuto": 99.6,
+    "veiculos_aguardando_instante": 72,
+    "velocidade_media_ativa": 0.7365049000079648,
+    "maior_fila_cruzamento_atual": 22,
+    "backlog_total_atual": 644,
+    "backlog_max_total": 644,
+    "backlog_gerado_total": 1276,
+    "backlog_despachado_total": 632,
+    "backlog_medio": 307.2606666666667
+  },
+  "configuracao": {
+    "taxa_geracao": 0.012,
+    "velocidade_max": 1.0,
+    "fps_simulacao": 60,
+    "intervalo_metricas": 300,
+    "backlog": {
+      "ativo": true,
+      "limite_global": 10000,
+      "flush_por_frame": 3
+    }
+  }
+}
